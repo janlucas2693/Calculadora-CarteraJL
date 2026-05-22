@@ -56,6 +56,7 @@ const DATA_META = {
 
 const N = ASSETS.length;
 const RISK_FREE = 0.045; // for Sharpe
+const PFPEN_IDX = ASSETS.findIndex(a => a.id === "pfpen");
 
 // ============================================================
 // CORRELATION MATRIX (16x16) - realistic dummy values
@@ -1472,7 +1473,6 @@ export default function Calculadora() {
   //   - volEsfuerzo: sigma cartera (toda la vol va al exceso)
   //   - sharpeEsfuerzo: excessCAGR / sigma (el indicador de oro)
   // ===========================================================
-  const PFPEN_IDX = ASSETS.findIndex(a => a.id === "pfpen");
   const pfBenchmark = useMemo(() => {
     if (!pledgeResult || !pledgeResult.netPatrimoniesFinal) return null;
     const pfRatePreTax = customReturns[PFPEN_IDX] || 0;

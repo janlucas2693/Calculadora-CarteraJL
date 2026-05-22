@@ -493,6 +493,68 @@ function runFullPledgeSim({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCallL
 }
 
 // ============================================================
+// Resuelve numéricamente la tasa anual "equivalente" tal que la
+// anualidad (V0 invertido al ratio r, retirando W/año durante T años)
+// termina con un patrimonio final = finalWealth.
+// Útil para anualizar el resultado de la pignoración en términos
+// comparables con un PF de tasa fija.
+// ============================================================
+function solveEquivRate(V0, W, T, finalWealth) {
+  let lo = -0.99, hi = 2.0;
+  for (let iter = 0; iter < 60; iter++) {
+    const r = (lo + hi) / 2;
+    const growth = Math.pow(1 + r, T);
+    const annFactor = Math.abs(r) > 1e-9 ? (growth - 1) / r : T;
+    const wealth = V0 * growth - W * annFactor;
+    if (wealth < finalWealth) lo = r;
+    else hi = r;
+  }
+  return (lo + hi) / 2;
+}
+
+// ============================================================
+// Horizon sweep: para cada T en [5..30], corre una simulación de
+// pignoración y calcula vs PF PEN: excess CAGR, P(beat PF), Sharpe
+// del esfuerzo. Encuentra el horizonte óptimo (mejor Sharpe).
+// ============================================================
+function runHorizonSweep({ mu, sigma, ltv0, intRate, marginCallLTV, withdrawalPct, pfRateNet, V0 = 10000, N = 1500 }) {
+  const horizons = [5, 7, 10, 12, 15, 18, 20, 22, 25, 28, 30];
+  const W_per_year_pct = withdrawalPct;
+  const curve = [];
+  for (const T of horizons) {
+    const W = V0 * W_per_year_pct;
+    // PF benchmark para este T
+    const growth = Math.pow(1 + pfRateNet, T);
+    const annFactor = Math.abs(pfRateNet) > 1e-9 ? (growth - 1) / pfRateNet : T;
+    const pfFinal = V0 * growth - W * annFactor;
+    // Pignoración: usar runFullPledgeSim con N reducido
+    const sim = runFullPledgeSim({ mu, sigma, T, V0, ltv0, intRate, marginCallLTV, withdrawalPct, N });
+    const arr = sim.netPatrimoniesFinal;
+    const sorted = arr.slice().sort((a, b) => a - b);
+    const medianNet = sorted[Math.floor(sorted.length / 2)];
+    let wins = 0;
+    for (let i = 0; i < arr.length; i++) if (arr[i] > pfFinal) wins++;
+    const probBeatPF = wins / arr.length;
+    // Excess CAGR vs PF (anualizado vía equivalent rate)
+    const equivRate = solveEquivRate(V0, W, T, medianNet);
+    const excessCAGR = equivRate - pfRateNet;
+    // Sharpe del esfuerzo: vol asignada = sigma cartera (porque PF es 0-vol)
+    const sharpeEsfuerzo = sigma > 0 ? excessCAGR / sigma : 0;
+    curve.push({
+      T, pfFinal, medianNet, probBeatPF,
+      equivRate, excessCAGR, sharpeEsfuerzo,
+      mcProb: sim.mcProb,
+    });
+  }
+  // Horizonte óptimo: máximo Sharpe del esfuerzo
+  let bestIdx = 0;
+  for (let i = 1; i < curve.length; i++) {
+    if (curve[i].sharpeEsfuerzo > curve[bestIdx].sharpeEsfuerzo) bestIdx = i;
+  }
+  return { curve, optimalHorizon: curve[bestIdx] };
+}
+
+// ============================================================
 // Compute tax cost IF user sold instead of pledging.
 // Uses median portfolio growth to estimate gain fraction per year.
 // gain_fraction(t) = max(0, 1 - 1/median_multiplier_at_t)
@@ -1120,40 +1182,19 @@ export default function Calculadora() {
   // Cuando se carga (o cambia) marketData:
   //   1) sincronizar los tickers Growth/Value con los que el usuario
   //      tenía en el script Python al momento de descargar
-  //   2) recalibrar los rangos retLow/retHigh a histRet x 0.5 / x 2.0
-  //   3) resetear customReturns a la histórica como punto de partida
-  //      (el usuario aún puede mover cada slider después)
+  //
+  // NOTA: NO tocamos customReturns ni retLow/retHigh. El default del
+  // µ esperado siempre es el midpoint del rango Damodaran (a.ret), nunca
+  // la histórica. La histórica del JSON aparece sólo como marcador en
+  // el slider y en el campo "Hist 10y".
   // ==========================================================
   useEffect(() => {
-    if (!marketData?.histRet) return;
-    const tk = marketData.meta?.tickers_used || {};
+    if (!marketData?.meta?.tickers_used) return;
+    const tk = marketData.meta.tickers_used;
     const growthTk = tk.msft;
     const valueTk  = tk.uber;
-    const growthHist = marketData.histRet.msft;
-    const valueHist  = marketData.histRet.uber;
-
-    if (growthTk || typeof growthHist === "number") {
-      setGrowthAsset(prev => ({
-        ...prev,
-        ticker: growthTk || prev.ticker,
-        retLow:  (typeof growthHist === "number" && growthHist > 0.005) ? growthHist * 0.5 : prev.retLow,
-        retHigh: (typeof growthHist === "number" && growthHist > 0.005) ? growthHist * 2.0 : prev.retHigh,
-      }));
-    }
-    if (valueTk || typeof valueHist === "number") {
-      setValueAsset(prev => ({
-        ...prev,
-        ticker: valueTk || prev.ticker,
-        retLow:  (typeof valueHist === "number" && valueHist > 0.005) ? valueHist * 0.5 : prev.retLow,
-        retHigh: (typeof valueHist === "number" && valueHist > 0.005) ? valueHist * 2.0 : prev.retHigh,
-      }));
-    }
-
-    setCustomReturns(prev => prev.map((curr, i) => {
-      const key = ASSETS[i].id;
-      const h = marketData.histRet[key];
-      return (typeof h === "number" && h > 0) ? h : curr;
-    }));
+    if (growthTk) setGrowthAsset(prev => ({ ...prev, ticker: growthTk }));
+    if (valueTk)  setValueAsset(prev  => ({ ...prev, ticker: valueTk }));
   }, [marketData]);
 
 
@@ -1207,6 +1248,7 @@ export default function Calculadora() {
   const [compareVsSell, setCompareVsSell] = useState(true);
   const [taxUSDGains, setTaxUSDGains] = useState(0.30);  // 30% withholding ETFs USA
   const [taxPENGains, setTaxPENGains] = useState(0.05);  // 5% PEN gains
+  const [mcTolerance, setMcTolerance] = useState(0.05);  // tolerancia P(margin call) para retiro maximo sostenible
   const [heatmapResult, setHeatmapResult] = useState(null);
   const [heatmapRunning, setHeatmapRunning] = useState(false);
   const [heatmapOpen, setHeatmapOpen] = useState(false);
@@ -1406,10 +1448,17 @@ export default function Calculadora() {
         mu, sigma, T: pledgeHorizon, V0: 10000,
         ltv0, intRate, marginCallLTV, N: 1500,
       });
-      setPledgeResult({ ...sim, sellAlt, sweep });
+      // Horizon sweep: Sharpe del esfuerzo vs T (busca el horizonte optimo)
+      const pfPreTax = customReturns[PFPEN_IDX] || 0.045;
+      const pfNet = pfPreTax * (1 - taxPEN);
+      const horizonSweep = runHorizonSweep({
+        mu, sigma, ltv0, intRate, marginCallLTV, withdrawalPct,
+        pfRateNet: pfNet, V0: 10000, N: 1500,
+      });
+      setPledgeResult({ ...sim, sellAlt, sweep, horizonSweep });
       setPledgeRunning(false);
     }, 50);
-  }, [mu, sigma, pledgeHorizon, ltv0, intRate, marginCallLTV, withdrawalPct, taxUSDGains, taxPENGains, usdW, penW]);
+  }, [mu, sigma, pledgeHorizon, ltv0, intRate, marginCallLTV, withdrawalPct, taxUSDGains, taxPENGains, usdW, penW, customReturns, taxPEN, PFPEN_IDX]);
 
   // ===========================================================
   // Benchmark: PF PEN (Plazo Fijo Peruano sin riesgo) como
@@ -1417,6 +1466,11 @@ export default function Calculadora() {
   // asigno en pestana 1 (customReturns[14] = pfpen) netada de
   // impuestos PEN, simula la misma anualidad y compara contra
   // los 3000 paths del netPatrimony de la pignoracion.
+  //
+  // Calcula tambien las metricas del "esfuerzo":
+  //   - excessCAGR: rentabilidad anual extra vs PF (via equiv rate)
+  //   - volEsfuerzo: sigma cartera (toda la vol va al exceso)
+  //   - sharpeEsfuerzo: excessCAGR / sigma (el indicador de oro)
   // ===========================================================
   const PFPEN_IDX = ASSETS.findIndex(a => a.id === "pfpen");
   const pfBenchmark = useMemo(() => {
@@ -1426,22 +1480,109 @@ export default function Calculadora() {
     const T = pledgeHorizon;
     const V0 = 10000;
     const W = V0 * withdrawalPct;
-    // Patrimonio del PF PEN al cabo de T anios retirando W cada anio:
-    //   V_final = V0 (1+r)^T  -  W * [((1+r)^T - 1) / r]
     const growth = Math.pow(1 + pfRateNet, T);
     const annuityFactor = Math.abs(pfRateNet) > 1e-9 ? (growth - 1) / pfRateNet : T;
     const pfFinal = V0 * growth - W * annuityFactor;
-    // Comparacion contra los 3000 paths de la pignoracion
+
     const arr = pledgeResult.netPatrimoniesFinal;
     let wins = 0;
     for (let i = 0; i < arr.length; i++) if (arr[i] > pfFinal) wins++;
     const probBeatPF = wins / arr.length;
-    // Spread mediano (positivo = pignoracion gana, negativo = PF gana)
     const sorted = arr.slice().sort((a, b) => a - b);
     const medianNet = sorted[Math.floor(sorted.length / 2)];
     const medianSpread = medianNet - pfFinal;
-    return { pfRatePreTax, pfRateNet, pfFinal, probBeatPF, medianSpread };
-  }, [pledgeResult, customReturns, taxPEN, pledgeHorizon, withdrawalPct, PFPEN_IDX]);
+
+    // Anualizar el resultado de la pignoracion via tasa equivalente
+    const equivRate = solveEquivRate(V0, W, T, medianNet);
+    const excessCAGR = equivRate - pfRateNet;
+    const volEsfuerzo = sigma;
+    const sharpeEsfuerzo = sigma > 0 ? excessCAGR / sigma : 0;
+
+    return {
+      pfRatePreTax, pfRateNet, pfFinal,
+      probBeatPF, medianSpread, medianNet,
+      equivRate, excessCAGR, volEsfuerzo, sharpeEsfuerzo,
+    };
+  }, [pledgeResult, customReturns, taxPEN, pledgeHorizon, withdrawalPct, PFPEN_IDX, sigma]);
+
+  // ===========================================================
+  // Escenario "Retiro maximo sostenible": dado un threshold de
+  // tolerancia P(margin call), encuentra el W maximo del sweep
+  // que cumple, y re-simula la pignoracion con ese retiro para
+  // generar curvas de evolucion (net patrimony, LTV) + metricas
+  // de CAGR comparativas y de salud del apalancamiento.
+  // ===========================================================
+  const sustainableScenario = useMemo(() => {
+    if (!pledgeResult?.sweep?.curve) return null;
+    // Encontrar el W maximo donde mcProbPct <= mcTolerance%
+    const targetPct = mcTolerance * 100;
+    const curve = pledgeResult.sweep.curve;
+    let wMaxPct = 0;
+    for (const pt of curve) {
+      if (pt.mcProbPct <= targetPct) wMaxPct = pt.wPctDisplay;
+      else break;  // curva monotonicamente creciente
+    }
+    // Si curva nunca cruza, todo el rango es sostenible — usar el maximo del sweep
+    if (wMaxPct === 0 && curve[0].mcProbPct <= targetPct) {
+      wMaxPct = curve[curve.length - 1].wPctDisplay;
+    }
+    // Si curva ya empieza por encima del threshold incluso a 0%, no hay W sostenible
+    if (wMaxPct === 0) {
+      return { wMaxPct: 0, infeasible: true };
+    }
+    const wMax = wMaxPct / 100;
+    const T = pledgeHorizon;
+    const V0 = 10000;
+    const W_year = V0 * wMax;
+    // Re-simular con wMax
+    const sim = runFullPledgeSim({
+      mu, sigma, T, V0, ltv0, intRate, marginCallLTV,
+      withdrawalPct: wMax, N: 1500,
+    });
+    // Metricas de CAGR
+    const finalNet = sim.netPatrimony_p50;
+    const cagrNet = finalNet > 0 ? Math.pow(finalNet / V0, 1 / T) - 1 : -1;
+    const totalWealth = finalNet + W_year * T;
+    const cagrTotalWealth = totalWealth > 0 ? Math.pow(totalWealth / V0, 1 / T) - 1 : -1;
+    // PF PEN y Gross portfolio CAGRs ya disponibles en pfBenchmark / mu
+    const pfRateNet = pfBenchmark ? pfBenchmark.pfRateNet : 0;
+    // Apalancamiento final = finalLoan / V_final_p50 (LTV mediano final)
+    const vFinalP50 = sim.yearStats[T].v_p50;
+    const leverageFinal = vFinalP50 > 0 ? sim.finalLoan / vFinalP50 : 0;
+    // Recovery margin: promedio de (marginCallLTV - ltv_p50/100) en cada año
+    let recoverySum = 0;
+    for (let t = 1; t <= T; t++) {
+      recoverySum += marginCallLTV - sim.yearStats[t].ltv_p50 / 100;
+    }
+    const recoveryMargin = recoverySum / T;
+    // Cash flow yield = W/V0 (es lo mismo que wMax, pero util en cards)
+    const cashFlowYield = wMax;
+    // Datos para el grafico: net patrimony y LTV por año
+    const chartData = sim.yearStats.map(s => ({
+      year: s.year,
+      net_p10: s.v_p10 - s.loan,
+      net_p50: s.v_p50 - s.loan,
+      net_p90: s.v_p90 - s.loan,
+      net_band_base: s.v_p10 - s.loan,
+      net_band_width: (s.v_p90 - s.loan) - (s.v_p10 - s.loan),
+      ltv_p10: s.ltv_p10,
+      ltv_p50: s.ltv_p50,
+      ltv_p90: s.ltv_p90,
+      ltv_band_base: s.ltv_p10,
+      ltv_band_width: s.ltv_p90 - s.ltv_p10,
+      mcLine: marginCallLTV * 100,
+    }));
+    return {
+      wMaxPct, wMax, W_year, T,
+      finalNet, totalWealth,
+      cagrNet, cagrTotalWealth, cagrPF: pfRateNet, cagrGross: mu,
+      leverageFinal, recoveryMargin, cashFlowYield,
+      mcProbActual: sim.mcProb,
+      chartData,
+      infeasible: false,
+    };
+  }, [pledgeResult, mcTolerance, pledgeHorizon, mu, sigma, ltv0, intRate, marginCallLTV, pfBenchmark]);
+
 
   const runHeatmapSim = useCallback(() => {
     setHeatmapRunning(true);
@@ -2349,8 +2490,7 @@ export default function Calculadora() {
                     al <strong>{fmtPct(pfBenchmark.pfRatePreTax, 2)}</strong> bruto
                     ({fmtPct(pfBenchmark.pfRateNet, 2)} neto post-tax {fmtPct(taxPEN, 0)})
                     y retiraras los mismos <strong>{fmtUsd(pledgeResult.W)}/año</strong> durante {pledgeHorizon} años,
-                    el resultado sería determinístico (sin riesgo de margin call ni de mercado). Comparamos contra los
-                    3.000 paths simulados de la pignoración.
+                    el resultado sería determinístico (sin riesgo de margin call ni de mercado). Este es tu <strong>piso de cero riesgo</strong>.
                   </p>
                   <div style={{
                     ...styles.btMetricsGrid,
@@ -2372,25 +2512,201 @@ export default function Calculadora() {
                         "var(--negative)"
                       }
                       caption={
-                        pfBenchmark.probBeatPF > 0.85 ? "Vale claramente la pena · pignoración gana en >85% de escenarios" :
-                        pfBenchmark.probBeatPF > 0.65 ? "Pignoración gana en la mayoría · el riesgo paga" :
-                        pfBenchmark.probBeatPF > 0.45 ? "Mixto · no compensa el riesgo extra para el retorno marginal" :
-                        "El PF PEN supera a la pignoración · mejor quedarse seguro"
+                        pfBenchmark.probBeatPF > 0.85 ? "Pignoración gana en >85% de escenarios" :
+                        pfBenchmark.probBeatPF > 0.65 ? "Pignoración gana en la mayoría" :
+                        pfBenchmark.probBeatPF > 0.45 ? "Mixto · no compensa claramente" :
+                        "El PF PEN supera a la pignoración"
                       }
                       sub={`${Math.round(pfBenchmark.probBeatPF * 3000)}/3000 paths superan el umbral`}
                     />
                     <PignCard
-                      title="Exceso mediano"
+                      title="Exceso mediano (USD)"
                       value={(pfBenchmark.medianSpread >= 0 ? "+" : "") + fmtUsd(pfBenchmark.medianSpread)}
                       color={pfBenchmark.medianSpread > 0 ? "var(--positive)" : "var(--negative)"}
                       caption={
                         pfBenchmark.medianSpread > 0
-                          ? `En el escenario mediano, la pignoración termina ${fmtUsd(pfBenchmark.medianSpread)} arriba del PF PEN`
-                          : `En el escenario mediano, la pignoración termina ${fmtUsd(-pfBenchmark.medianSpread)} debajo del PF PEN`
+                          ? `Pignoración termina ${fmtUsd(pfBenchmark.medianSpread)} arriba del PF en el escenario mediano`
+                          : `Pignoración termina ${fmtUsd(-pfBenchmark.medianSpread)} debajo del PF en el escenario mediano`
                       }
-                      sub={`Recompensa por correr el riesgo de mercado y margin call`}
+                      sub={`Cash absoluto retirado fue el mismo en ambas estrategias`}
                     />
                   </div>
+
+                  {/* ============ El esfuerzo: anualizar + Sharpe ============ */}
+                  <h3 style={{ ...styles.h3, marginTop: 28 }}>El esfuerzo: ¿cuánto extra ganas por unidad de riesgo?</h3>
+                  <p style={styles.distribIntro}>
+                    Anualizamos el resultado de la pignoración resolviendo numéricamente la tasa equivalente
+                    de un PF que daría el mismo patrimonio. La <strong>volatilidad de la cartera ({fmtPct(sigma, 2)})</strong> se
+                    asigna íntegramente al exceso porque el PF tiene σ = 0. El cociente es el <strong>Sharpe del esfuerzo</strong>:
+                    cuánto retorno extra anual obtienes por cada punto de volatilidad asumida.
+                  </p>
+                  <div style={{
+                    ...styles.btMetricsGrid,
+                    gridTemplateColumns: "repeat(3, 1fr)",
+                    marginTop: 14,
+                  }}>
+                    <PignCard
+                      title="Rentabilidad extra anual"
+                      value={(pfBenchmark.excessCAGR >= 0 ? "+" : "") + fmtPct(pfBenchmark.excessCAGR, 2)}
+                      color={pfBenchmark.excessCAGR > 0 ? "var(--positive)" : "var(--negative)"}
+                      caption={`CAGR equivalente pignoración: ${fmtPct(pfBenchmark.equivRate, 2)} · PF: ${fmtPct(pfBenchmark.pfRateNet, 2)}`}
+                      sub={`Lo que ganas extra por año, anualizado al horizonte ${pledgeHorizon}a`}
+                    />
+                    <PignCard
+                      title="Volatilidad asignada"
+                      value={fmtPct(pfBenchmark.volEsfuerzo, 1)}
+                      caption={`σ de la cartera completa (toda la incertidumbre va al exceso)`}
+                      sub={`El PF tiene σ = 0, así que el riesgo total es el de tu portfolio`}
+                    />
+                    <PignCard
+                      title="Sharpe del esfuerzo"
+                      value={pfBenchmark.sharpeEsfuerzo.toFixed(2)}
+                      color={
+                        pfBenchmark.sharpeEsfuerzo > 0.5 ? "var(--positive)" :
+                        pfBenchmark.sharpeEsfuerzo > 0.2 ? "var(--gold)" :
+                        "var(--negative)"
+                      }
+                      caption={
+                        pfBenchmark.sharpeEsfuerzo > 0.7 ? "Excelente · ratio top de la industria" :
+                        pfBenchmark.sharpeEsfuerzo > 0.4 ? "Bueno · el riesgo paga decentemente" :
+                        pfBenchmark.sharpeEsfuerzo > 0.2 ? "Aceptable · ratio modesto" :
+                        pfBenchmark.sharpeEsfuerzo > 0   ? "Pobre · poco retorno por mucho riesgo" :
+                        "Negativo · el PF gana en mediana"
+                      }
+                      sub={`El indicador de oro: excessCAGR / σ`}
+                    />
+                  </div>
+
+                  {/* ============ Sweep por horizonte ============ */}
+                  {pledgeResult.horizonSweep && (
+                    <>
+                      <h3 style={{ ...styles.h3, marginTop: 28 }}>¿Con qué horizonte temporal vale más la pena?</h3>
+                      <p style={styles.distribIntro}>
+                        Repetimos el análisis para horizontes de 5 a 30 años. Cada punto del gráfico es una simulación
+                        completa con 1.500 paths. Buscamos el <strong>horizonte que maximiza el Sharpe del esfuerzo</strong> —
+                        ahí está el sweet spot. La línea roja vertical marca el horizonte actual ({pledgeHorizon} años).
+                      </p>
+                      <div style={{ marginTop: 4, marginBottom: 14, padding: "12px 18px", background: "var(--surface-2)", border: "1px solid var(--gold)", borderRadius: 2 }}>
+                        <strong style={{ color: "var(--gold)" }}>★ Horizonte óptimo: {pledgeResult.horizonSweep.optimalHorizon.T} años</strong>
+                        {" — "}Sharpe del esfuerzo = <strong>{pledgeResult.horizonSweep.optimalHorizon.sharpeEsfuerzo.toFixed(2)}</strong>,
+                        rentabilidad extra <strong>{fmtPct(pledgeResult.horizonSweep.optimalHorizon.excessCAGR, 2)}</strong>,
+                        P(beat PF) = <strong>{fmtPct(pledgeResult.horizonSweep.optimalHorizon.probBeatPF, 0)}</strong>
+                      </div>
+                      <div style={styles.chartWrap}>
+                        <ResponsiveContainer width="100%" height={340}>
+                          <ComposedChart data={pledgeResult.horizonSweep.curve} margin={{ top: 20, right: 60, left: 20, bottom: 40 }}>
+                            <CartesianGrid stroke="rgba(0,0,0,0.06)" />
+                            <XAxis
+                              dataKey="T" type="number" domain={[5, 30]}
+                              tickFormatter={v => v + "a"}
+                              stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
+                              label={{ value: "Horizonte temporal (años)", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }}
+                            />
+                            <YAxis
+                              yAxisId="sharpe"
+                              orientation="left"
+                              tickFormatter={v => v.toFixed(2)}
+                              stroke="var(--gold)" tick={{ fontSize: 11 }}
+                              label={{ value: "Sharpe del esfuerzo", angle: -90, position: "insideLeft", fill: "var(--gold)", fontSize: 12 }}
+                            />
+                            <YAxis
+                              yAxisId="prob"
+                              orientation="right"
+                              domain={[0, 100]}
+                              tickFormatter={v => v.toFixed(0) + "%"}
+                              stroke="var(--accent)" tick={{ fontSize: 11 }}
+                              label={{ value: "P(beat PF)", angle: 90, position: "insideRight", fill: "var(--accent)", fontSize: 12 }}
+                            />
+                            <Tooltip
+                              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
+                              labelFormatter={v => `Horizonte ${v} años`}
+                              formatter={(v, name) => {
+                                if (name === "Sharpe esfuerzo") return [v.toFixed(2), name];
+                                if (name === "P(beat PF)") return [v.toFixed(1) + "%", name];
+                                if (name === "Excess CAGR") return [(v*100).toFixed(2) + "%", name];
+                                return [v, name];
+                              }}
+                            />
+                            <Line
+                              yAxisId="sharpe"
+                              type="monotone"
+                              dataKey="sharpeEsfuerzo"
+                              stroke="var(--gold)"
+                              strokeWidth={3}
+                              dot={{ r: 4, fill: "var(--gold)" }}
+                              name="Sharpe esfuerzo"
+                              isAnimationActive={false}
+                            />
+                            <Line
+                              yAxisId="prob"
+                              type="monotone"
+                              dataKey={(d) => d.probBeatPF * 100}
+                              stroke="var(--accent)"
+                              strokeWidth={2}
+                              strokeDasharray="6 3"
+                              dot={{ r: 3, fill: "var(--accent)" }}
+                              name="P(beat PF)"
+                              isAnimationActive={false}
+                            />
+                            <ReferenceLine
+                              x={pledgeHorizon}
+                              stroke="var(--negative)"
+                              strokeDasharray="3 3"
+                              label={{ value: `actual (${pledgeHorizon}a)`, position: "top", fontSize: 10, fill: "var(--negative)" }}
+                              yAxisId="sharpe"
+                            />
+                            <ReferenceLine
+                              x={pledgeResult.horizonSweep.optimalHorizon.T}
+                              stroke="var(--positive)"
+                              strokeWidth={2}
+                              label={{ value: `★ óptimo`, position: "top", fontSize: 10, fill: "var(--positive)", fontWeight: 600 }}
+                              yAxisId="sharpe"
+                            />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 18 }}>Rentabilidad extra anual por horizonte</h4>
+                      <div style={styles.chartWrap}>
+                        <ResponsiveContainer width="100%" height={240}>
+                          <ComposedChart data={pledgeResult.horizonSweep.curve} margin={{ top: 16, right: 30, left: 20, bottom: 40 }}>
+                            <CartesianGrid stroke="rgba(0,0,0,0.06)" />
+                            <XAxis
+                              dataKey="T" type="number" domain={[5, 30]}
+                              tickFormatter={v => v + "a"}
+                              stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
+                              label={{ value: "Horizonte temporal (años)", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }}
+                            />
+                            <YAxis
+                              tickFormatter={v => (v*100).toFixed(1) + "%"}
+                              stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
+                              label={{ value: "Excess CAGR", angle: -90, position: "insideLeft", fill: "var(--ink-muted)", fontSize: 12 }}
+                            />
+                            <Tooltip
+                              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
+                              labelFormatter={v => `Horizonte ${v} años`}
+                              formatter={(v) => [(v*100).toFixed(2) + "%", "Excess CAGR"]}
+                            />
+                            <ReferenceLine y={0} stroke="var(--ink-muted)" strokeDasharray="2 2" />
+                            <Area
+                              type="monotone"
+                              dataKey="excessCAGR"
+                              stroke="var(--positive)"
+                              strokeWidth={2.5}
+                              fill="var(--positive)"
+                              fillOpacity={0.12}
+                              isAnimationActive={false}
+                            />
+                            <ReferenceLine
+                              x={pledgeHorizon}
+                              stroke="var(--negative)"
+                              strokeDasharray="3 3"
+                            />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
 
@@ -2453,6 +2769,220 @@ export default function Calculadora() {
                   </span>
                 </div>
               </div>
+
+              {/* ============ Retiro máximo sostenible: análisis completo ============ */}
+              {sustainableScenario && (
+                <>
+                  <h3 style={{ ...styles.h3, marginTop: 28 }}>Retiro máximo sostenible · análisis completo</h3>
+                  <p style={styles.distribIntro}>
+                    Asume que <strong>todos los retiros se hacen 100% vía préstamo pignorado</strong> a la
+                    tasa de <strong>{fmtPct(intRate, 2)}</strong> (slider arriba). La cartera nunca se vende —
+                    sigue generando retorno μ = <strong>{fmtPct(mu, 2)}</strong>. El retiro máximo es el más
+                    alto que mantiene la probabilidad de margin call debajo de tu tolerancia.
+                  </p>
+
+                  {/* Selector de tolerancia */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 10, marginBottom: 18 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-muted)" }}>
+                      Tolerancia P(margin call):
+                    </span>
+                    {[0.01, 0.05, 0.10, 0.20].map(tol => (
+                      <button
+                        key={tol}
+                        onClick={() => setMcTolerance(tol)}
+                        style={{
+                          padding: "6px 14px",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          background: Math.abs(mcTolerance - tol) < 0.001 ? "var(--ink)" : "var(--surface)",
+                          color: Math.abs(mcTolerance - tol) < 0.001 ? "var(--bg)" : "var(--ink)",
+                          border: "1px solid var(--border-strong)",
+                          borderRadius: 2,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {tol === 0.01 ? "1% (muy conservador)" :
+                         tol === 0.05 ? "5% (conservador)" :
+                         tol === 0.10 ? "10% (moderado)" :
+                         "20% (agresivo)"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {sustainableScenario.infeasible ? (
+                    <div style={{ ...styles.placeholder, color: "var(--negative)" }}>
+                      Con los parámetros actuales (LTV {fmtPct(ltv0, 0)}, tasa {fmtPct(intRate, 2)}, umbral {fmtPct(marginCallLTV, 0)})
+                      ningún retiro mantiene P(margin call) ≤ {fmtPct(mcTolerance, 0)}. Reduce LTV inicial,
+                      aumenta el umbral de margin call, o sube tu tolerancia.
+                    </div>
+                  ) : (
+                    <>
+                      {/* Headline + botón aplicar */}
+                      <div style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 18,
+                        padding: "16px 22px",
+                        background: "var(--surface-2)",
+                        border: "2px solid var(--positive)",
+                        borderRadius: 2,
+                        marginBottom: 22,
+                      }}>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-muted)", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                            Retiro máximo a tolerancia {fmtPct(mcTolerance, 0)}
+                          </div>
+                          <div style={{ fontSize: 26, fontWeight: 700, color: "var(--positive)", marginTop: 4 }}>
+                            {fmtPct(sustainableScenario.wMax, 2)} anual
+                            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--ink-muted)", marginLeft: 10 }}>
+                              = {fmtUsd(sustainableScenario.W_year)}/año sobre $10k
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>
+                            P(margin call) realizada en la re-simulación: {fmtPct(sustainableScenario.mcProbActual, 1)}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setWithdrawalPct(sustainableScenario.wMax);
+                            setTimeout(() => runPledge(), 60);
+                          }}
+                          style={{ ...styles.runBtn, whiteSpace: "nowrap" }}
+                          disabled={pledgeRunning}
+                          title="Aplica este retiro al slider 'Retiro anual' y re-corre el Monte Carlo completo"
+                        >
+                          Aplicar este retiro →
+                        </button>
+                      </div>
+
+                      {/* Gráfico: net patrimony + LTV */}
+                      <h4 style={{ ...styles.h3, fontSize: 14 }}>Evolución bajo el escenario sostenible</h4>
+                      <div style={styles.chartWrap}>
+                        <ResponsiveContainer width="100%" height={380}>
+                          <ComposedChart data={sustainableScenario.chartData} margin={{ top: 20, right: 70, left: 20, bottom: 30 }}>
+                            <CartesianGrid stroke="rgba(0,0,0,0.06)" />
+                            <XAxis dataKey="year" stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
+                                   label={{ value: "Años", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }} />
+                            <YAxis yAxisId="left" tickFormatter={fmtUsdK} stroke="var(--positive)" tick={{ fontSize: 11, fill: "var(--positive)" }}
+                                   label={{ value: "Patrimonio neto (USD)", angle: -90, position: "insideLeft", fill: "var(--positive)", fontSize: 11 }} />
+                            <YAxis yAxisId="right" orientation="right" domain={[0, 100]}
+                                   tickFormatter={v => v + "%"} stroke="var(--gold)" tick={{ fontSize: 11, fill: "var(--gold)" }}
+                                   label={{ value: "LTV %", angle: 90, position: "insideRight", fill: "var(--gold)", fontSize: 11 }} />
+                            <Tooltip
+                              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
+                              formatter={(v, name) => {
+                                if (name === "LTV (mediana)" || name === "Umbral margin call") return [v.toFixed(1) + "%", name];
+                                if (name === "Banda LTV P10–P90") return [v.toFixed(1) + "%", "ancho"];
+                                if (name === "Banda neto P10–P90") return [fmtUsd(v), "ancho"];
+                                return [fmtUsd(v), name];
+                              }}
+                              labelFormatter={(v) => `Año ${v}`}
+                            />
+                            {/* Banda neto p10-p90 */}
+                            <Area yAxisId="left" type="monotone" dataKey="net_band_base" stackId="netband"
+                                  stroke="none" fill="transparent" name=" " />
+                            <Area yAxisId="left" type="monotone" dataKey="net_band_width" stackId="netband"
+                                  stroke="none" fill="rgba(45, 122, 79, 0.18)" name="Banda neto P10–P90" isAnimationActive={false} />
+                            {/* Mediana neto */}
+                            <Line yAxisId="left" type="monotone" dataKey="net_p50"
+                                  stroke="var(--positive)" strokeWidth={2.5} dot={false}
+                                  name="Patrimonio neto (mediana)" isAnimationActive={false} />
+                            {/* Referencia V0 */}
+                            <ReferenceLine yAxisId="left" y={10000} stroke="var(--ink-muted)" strokeDasharray="3 3"
+                                          label={{ value: "Capital inicial", position: "right", fontSize: 10, fill: "var(--ink-muted)" }} />
+                            {/* LTV mediana */}
+                            <Line yAxisId="right" type="monotone" dataKey="ltv_p50"
+                                  stroke="var(--gold)" strokeWidth={2.5} strokeDasharray="6 3" dot={false}
+                                  name="LTV (mediana)" isAnimationActive={false} />
+                            {/* Umbral margin call */}
+                            <ReferenceLine yAxisId="right" y={marginCallLTV * 100}
+                                          stroke="var(--negative)" strokeWidth={2}
+                                          label={{ value: `Margin call ${fmtPct(marginCallLTV, 0)}`, position: "right", fontSize: 10, fill: "var(--negative)", fontWeight: 600 }} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      {/* Cards: CAGR comparativas */}
+                      <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 18 }}>CAGR comparativas · ¿qué tasa anual equivalente entregaste?</h4>
+                      <div style={{
+                        ...styles.btMetricsGrid,
+                        gridTemplateColumns: "repeat(4, 1fr)",
+                        marginTop: 10,
+                      }}>
+                        <PignCard
+                          title="CAGR Net only"
+                          value={fmtPct(sustainableScenario.cagrNet, 2)}
+                          color={sustainableScenario.cagrNet > 0 ? "var(--ink)" : "var(--negative)"}
+                          caption={`Patrimonio neto final $${sustainableScenario.finalNet.toFixed(0)} sobre $10k inicial`}
+                          sub={`Lo que sigue invertido al final del horizonte`}
+                        />
+                        <PignCard
+                          title="CAGR Total Wealth"
+                          value={fmtPct(sustainableScenario.cagrTotalWealth, 2)}
+                          color="var(--positive)"
+                          caption={`Incluye cash ya consumido: $${sustainableScenario.finalNet.toFixed(0)} + $${(sustainableScenario.W_year * sustainableScenario.T).toFixed(0)} retirados`}
+                          sub={`Lo que generó la estrategia en términos absolutos`}
+                        />
+                        <PignCard
+                          title="CAGR PF PEN"
+                          value={fmtPct(sustainableScenario.cagrPF, 2)}
+                          color="var(--ink-muted)"
+                          caption={`Benchmark cero riesgo · post-tax`}
+                          sub={`Tu piso de comparación`}
+                        />
+                        <PignCard
+                          title="CAGR Portfolio Gross"
+                          value={fmtPct(sustainableScenario.cagrGross, 2)}
+                          color="var(--gold)"
+                          caption={`μ del portfolio sin pignoración ni retiros`}
+                          sub={`Lo que tendrías si no tocaras nada`}
+                        />
+                      </div>
+
+                      {/* Cards: detalle del escenario */}
+                      <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 18 }}>Detalle del escenario</h4>
+                      <div style={{
+                        ...styles.btMetricsGrid,
+                        gridTemplateColumns: "repeat(3, 1fr)",
+                        marginTop: 10,
+                      }}>
+                        <PignCard
+                          title="Apalancamiento final"
+                          value={fmtPct(sustainableScenario.leverageFinal, 1)}
+                          color={
+                            sustainableScenario.leverageFinal < 0.5 ? "var(--positive)" :
+                            sustainableScenario.leverageFinal < 0.65 ? "var(--gold)" : "var(--negative)"
+                          }
+                          caption={`LTV mediano al cierre del horizonte (préstamo / valor cartera)`}
+                          sub={
+                            sustainableScenario.leverageFinal < 0.4 ? "Sano · margen amplio" :
+                            sustainableScenario.leverageFinal < 0.55 ? "Aceptable · vigilar" :
+                            "Cerca del umbral · ojo"
+                          }
+                        />
+                        <PignCard
+                          title="Cash flow yield"
+                          value={fmtPct(sustainableScenario.cashFlowYield, 2)}
+                          caption={`$${sustainableScenario.W_year.toFixed(0)}/año sobre $10k inicial`}
+                          sub={`Lo que retiras como % del capital de partida`}
+                        />
+                        <PignCard
+                          title="Recovery margin"
+                          value={fmtPct(sustainableScenario.recoveryMargin, 1)}
+                          color={
+                            sustainableScenario.recoveryMargin > 0.30 ? "var(--positive)" :
+                            sustainableScenario.recoveryMargin > 0.15 ? "var(--gold)" : "var(--negative)"
+                          }
+                          caption={`Distancia promedio entre LTV mediano y umbral margin call`}
+                          sub={`Más colchón = más tranquilo`}
+                        />
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
 
               {/* Main chart: portfolio band + loan + LTV */}
               <h3 style={styles.h3}>Dinámica completa · cartera, préstamo y LTV</h3>
@@ -2783,10 +3313,12 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
   const effRet = asset.isCash ? customRet * (1 - taxRate) : customRet;
   const retOutOfRange = customRet < asset.retLow || customRet > asset.retHigh;
   // Cuando hay marketData y la historica es positiva, el slider se centra en
-  // ella con rango [histRet x 0.5, histRet x 2.0] (-50% / +100% sobre histórica).
+  // ella. Rango: -100%/+100% sobre histRet para growth/value (mas latitud porque
+  // son acciones individuales mas volatiles), -50%/+100% para el resto.
   // Sino, mantiene el comportamiento legacy: rango fijo [0, max(retHigh*1.5, histRet*1.3, 6%)].
   const useHistAnchor = hasMarketData && typeof asset.histRet === "number" && asset.histRet > 0.005;
-  const minRet = useHistAnchor ? asset.histRet * 0.5 : 0;
+  const minMultiplier = asset.editable ? 0.0 : 0.5;
+  const minRet = useHistAnchor ? asset.histRet * minMultiplier : 0;
   const maxRet = useHistAnchor
     ? asset.histRet * 2.0
     : Math.max(asset.retHigh * 1.5, asset.histRet * 1.3, 0.06);

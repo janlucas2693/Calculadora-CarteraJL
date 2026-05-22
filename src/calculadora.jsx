@@ -472,6 +472,12 @@ function runFullPledgeSim({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCallL
   const totalInterest = finalLoan - Loan0 - totalCashWithdrawn;
   const final = yearStats[T];
 
+  // Patrimonio neto final por path (necesario para comparar contra benchmarks)
+  const netPatrimoniesFinal = new Array(N);
+  for (let s = 0; s < N; s++) {
+    netPatrimoniesFinal[s] = paths[s][T] - finalLoan;
+  }
+
   return {
     yearStats,
     W, Loan0,
@@ -482,6 +488,7 @@ function runFullPledgeSim({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCallL
     netPatrimony_p10: final.v_p10 - finalLoan,
     netPatrimony_p50: final.v_p50 - finalLoan,
     netPatrimony_p90: final.v_p90 - finalLoan,
+    netPatrimoniesFinal,
   };
 }
 
@@ -731,7 +738,7 @@ function normalize(weights) {
 }
 
 // ============================================================
-// PYTHON SCRIPT — un solo flujo: descarga 11 tickers reales + inyecta 5 sinteticos
+// PYTHON SCRIPT — descarga + genera JSON + 3 CSVs para Excel
 // {GROWTH} y {VALUE} se reemplazan en runtime con los tickers Value/Growth elegidos
 // ============================================================
 const DOWNLOAD_PY_TEMPLATE = `"""
@@ -742,7 +749,11 @@ calcula sigma, CAGR, beta vs S&P, beta vs EPU, VaR/ES historicos al 95% y 99%, y
 matriz de correlaciones 16x16 (con los 5 cash/sinteticos hardcodeados con sigma=0 y
 sus respectivos histRet fijos).
 
-Salida: yfinance_results.json — pegale el contenido al chat con Claude.
+Salidas generadas en el mismo folder:
+  - yfinance_results.json       (para cargar en la calculadora web)
+  - yfinance_summary.csv        (1 fila por activo, abrir en Excel)
+  - yfinance_correlation.csv    (matriz 16x16 con labels)
+  - yfinance_prices.csv         (precios diarios crudos)
 
 Uso:
   pip install yfinance pandas numpy
@@ -772,6 +783,26 @@ ASSET_KEYS = [
     "ibsav", "cdusd", "epu", "pensov", "pfpen", "savpen",
 ]
 
+# Nombres descriptivos para el CSV (mas legibles que los keys)
+ASSET_NAMES = {
+    "cspx":   "ETF S&P 500",
+    "cndx":   "ETF Nasdaq 100",
+    "iwda":   "ETF MSCI World",
+    "msft":   "Stock Growth",
+    "uber":   "Stock Value",
+    "igln":   "ETF Gold",
+    "vtc":    "ETF Bonos Corp USD",
+    "bil":    "ETF Treasury 0-3M",
+    "ief":    "ETF Treasury 10Y",
+    "btc":    "Bitcoin",
+    "ibsav":  "Cuenta Ahorros IB (USD)",
+    "cdusd":  "Plazo Fijo CD (USD)",
+    "epu":    "ETF Peru (proxy RV)",
+    "pensov": "Bonos Soberanos PEN (sint)",
+    "pfpen":  "Plazo Fijo PEN",
+    "savpen": "Cuenta Ahorros PEN",
+}
+
 # Tickers reales (con fallback). msft/uber son slots editables.
 REAL_TICKERS = [
     ("cspx", "CSPX.L",  "IVV"),
@@ -797,14 +828,15 @@ STATIC_HISTRET = {
     "savpen": 0.035,
 }
 
-OUTPUT_JSON = "yfinance_results.json"
+OUTPUT_JSON         = "yfinance_results.json"
+OUTPUT_SUMMARY_CSV  = "yfinance_summary.csv"
+OUTPUT_CORR_CSV     = "yfinance_correlation.csv"
+OUTPUT_PRICES_CSV   = "yfinance_prices.csv"
 
 
 def _extract_close(df):
-    """yfinance >=0.2.40 devuelve MultiIndex en columnas incluso con un solo ticker.
-    Esta funcion devuelve la serie de Close sin importar el formato."""
+    """yfinance >=0.2.40 devuelve MultiIndex en columnas incluso con un solo ticker."""
     if isinstance(df.columns, pd.MultiIndex):
-        # ('Close', ticker)
         close = df.xs("Close", axis=1, level=0)
         if isinstance(close, pd.DataFrame):
             close = close.iloc[:, 0]
@@ -874,6 +906,45 @@ def _build_full_correlation(corr_real_df, present_keys):
     return M
 
 
+def _write_summary_csv(out, used, path):
+    """Genera CSV con 1 fila por activo: key, name, ticker, sigma, histRet, betas, var, es."""
+    rows = []
+    for k in ASSET_KEYS:
+        rows.append({
+            "key":          k,
+            "name":         ASSET_NAMES.get(k, k),
+            "ticker_used":  used.get(k, "(estatico)"),
+            "sigma":        out["sigma"][k],
+            "histRet":      out["histRet"][k],
+            "beta_sp":      out["beta_sp"][k],
+            "beta_epu":     out["beta_epu"][k],
+            "var_95":       out["var_95"][k],
+            "var_99":       out["var_99"][k],
+            "es_95":        out["es_95"][k],
+            "es_99":        out["es_99"][k],
+        })
+    df = pd.DataFrame(rows)
+    # Formatear a 6 decimales para que Excel muestre numeros bonitos
+    for col in ["sigma", "histRet", "beta_sp", "beta_epu", "var_95", "var_99", "es_95", "es_99"]:
+        df[col] = df[col].round(6)
+    df.to_csv(path, index=False)
+
+
+def _write_correlation_csv(corr_matrix, path):
+    """Matriz 16x16 con headers fila y columna usando los asset_keys."""
+    df = pd.DataFrame(corr_matrix, index=ASSET_KEYS, columns=ASSET_KEYS)
+    df = df.round(4)
+    df.to_csv(path, index_label="asset")
+
+
+def _write_prices_csv(prices_df, path):
+    """Precios diarios crudos: 1 columna por activo descargado, indice = fecha."""
+    out = prices_df.copy()
+    out.index.name = "date"
+    out = out.round(4)
+    out.to_csv(path)
+
+
 def main():
     print("=" * 62)
     print(f"Descargando {len(REAL_TICKERS)} tickers reales desde yfinance")
@@ -898,19 +969,16 @@ def main():
     sp_r = log_rets["cspx"]
     ep_r = log_rets["epu"]
 
-    # Stats para los 11 reales
     stats = {k: _compute_stats(log_rets, k, sp_r, ep_r) for k in df.columns}
 
     def metric(name):
         out = {k: stats[k][name] for k in df.columns}
-        # los 5 sinteticos en 0 para todas las metricas (excepto histRet)
         for k in STATIC_HISTRET:
             out[k] = 0.0
         return {k: float(out.get(k, 0.0)) for k in ASSET_KEYS}
 
     sigma_all   = metric("sigma")
     histRet_all = metric("histRet")
-    # sobreescribir los 5 sinteticos con sus histRet hardcoded
     for k, v in STATIC_HISTRET.items():
         histRet_all[k] = v
 
@@ -938,13 +1006,25 @@ def main():
         "asset_keys": ASSET_KEYS,
     }
 
+    # === Escribir los 4 archivos ===
     with open(OUTPUT_JSON, "w") as f:
         json.dump(out, f, indent=2)
+    _write_summary_csv(out, used, OUTPUT_SUMMARY_CSV)
+    _write_correlation_csv(corr_full, OUTPUT_CORR_CSV)
+    _write_prices_csv(df, OUTPUT_PRICES_CSV)
 
+    # === Resumen en consola ===
     print(f"\\n{'KEY':<8}{'TICKER':<12}{'CAGR':>9}{'SIGMA':>9}{'BETA_SP':>10}")
     for k in present:
         print(f"{k:<8}{used.get(k,'-'):<12}{histRet_all[k]*100:>8.2f}%{sigma_all[k]*100:>8.2f}%{stats[k]['beta_sp']:>9.3f}")
-    print(f"\\n{'='*62}\\nListo. Pega {OUTPUT_JSON} en el chat con Claude.\\n{'='*62}")
+
+    print(f"\\n{'='*62}")
+    print("ARCHIVOS GENERADOS:")
+    print(f"  {OUTPUT_JSON:35s}  <- carga este en la calculadora web")
+    print(f"  {OUTPUT_SUMMARY_CSV:35s}  <- abre en Excel: metricas por activo")
+    print(f"  {OUTPUT_CORR_CSV:35s}  <- abre en Excel: matriz 16x16")
+    print(f"  {OUTPUT_PRICES_CSV:35s}  <- abre en Excel: precios diarios crudos")
+    print(f"{'='*62}")
 
 
 if __name__ == "__main__":
@@ -1035,6 +1115,47 @@ export default function Calculadora() {
   // Index 3 = Growth (MSFT default), Index 4 = Value (UBER default)
   const [growthAsset, setGrowthAsset] = useState({ ticker: "MSFT", retLow: 0.11, retHigh: 0.14 });
   const [valueAsset, setValueAsset] = useState({ ticker: "UBER", retLow: 0.09, retHigh: 0.12 });
+
+  // ==========================================================
+  // Cuando se carga (o cambia) marketData:
+  //   1) sincronizar los tickers Growth/Value con los que el usuario
+  //      tenía en el script Python al momento de descargar
+  //   2) recalibrar los rangos retLow/retHigh a histRet x 0.5 / x 2.0
+  //   3) resetear customReturns a la histórica como punto de partida
+  //      (el usuario aún puede mover cada slider después)
+  // ==========================================================
+  useEffect(() => {
+    if (!marketData?.histRet) return;
+    const tk = marketData.meta?.tickers_used || {};
+    const growthTk = tk.msft;
+    const valueTk  = tk.uber;
+    const growthHist = marketData.histRet.msft;
+    const valueHist  = marketData.histRet.uber;
+
+    if (growthTk || typeof growthHist === "number") {
+      setGrowthAsset(prev => ({
+        ...prev,
+        ticker: growthTk || prev.ticker,
+        retLow:  (typeof growthHist === "number" && growthHist > 0.005) ? growthHist * 0.5 : prev.retLow,
+        retHigh: (typeof growthHist === "number" && growthHist > 0.005) ? growthHist * 2.0 : prev.retHigh,
+      }));
+    }
+    if (valueTk || typeof valueHist === "number") {
+      setValueAsset(prev => ({
+        ...prev,
+        ticker: valueTk || prev.ticker,
+        retLow:  (typeof valueHist === "number" && valueHist > 0.005) ? valueHist * 0.5 : prev.retLow,
+        retHigh: (typeof valueHist === "number" && valueHist > 0.005) ? valueHist * 2.0 : prev.retHigh,
+      }));
+    }
+
+    setCustomReturns(prev => prev.map((curr, i) => {
+      const key = ASSETS[i].id;
+      const h = marketData.histRet[key];
+      return (typeof h === "number" && h > 0) ? h : curr;
+    }));
+  }, [marketData]);
+
 
   // Effective asset universe: overrides idx 3, 4 with user-defined tickers/ranges,
   // and applies vol/histRet from marketData (if loaded) to ALL assets.
@@ -1290,6 +1411,38 @@ export default function Calculadora() {
     }, 50);
   }, [mu, sigma, pledgeHorizon, ltv0, intRate, marginCallLTV, withdrawalPct, taxUSDGains, taxPENGains, usdW, penW]);
 
+  // ===========================================================
+  // Benchmark: PF PEN (Plazo Fijo Peruano sin riesgo) como
+  // umbral de comparacion. Usa la rentabilidad que el usuario
+  // asigno en pestana 1 (customReturns[14] = pfpen) netada de
+  // impuestos PEN, simula la misma anualidad y compara contra
+  // los 3000 paths del netPatrimony de la pignoracion.
+  // ===========================================================
+  const PFPEN_IDX = ASSETS.findIndex(a => a.id === "pfpen");
+  const pfBenchmark = useMemo(() => {
+    if (!pledgeResult || !pledgeResult.netPatrimoniesFinal) return null;
+    const pfRatePreTax = customReturns[PFPEN_IDX] || 0;
+    const pfRateNet    = pfRatePreTax * (1 - taxPEN);
+    const T = pledgeHorizon;
+    const V0 = 10000;
+    const W = V0 * withdrawalPct;
+    // Patrimonio del PF PEN al cabo de T anios retirando W cada anio:
+    //   V_final = V0 (1+r)^T  -  W * [((1+r)^T - 1) / r]
+    const growth = Math.pow(1 + pfRateNet, T);
+    const annuityFactor = Math.abs(pfRateNet) > 1e-9 ? (growth - 1) / pfRateNet : T;
+    const pfFinal = V0 * growth - W * annuityFactor;
+    // Comparacion contra los 3000 paths de la pignoracion
+    const arr = pledgeResult.netPatrimoniesFinal;
+    let wins = 0;
+    for (let i = 0; i < arr.length; i++) if (arr[i] > pfFinal) wins++;
+    const probBeatPF = wins / arr.length;
+    // Spread mediano (positivo = pignoracion gana, negativo = PF gana)
+    const sorted = arr.slice().sort((a, b) => a - b);
+    const medianNet = sorted[Math.floor(sorted.length / 2)];
+    const medianSpread = medianNet - pfFinal;
+    return { pfRatePreTax, pfRateNet, pfFinal, probBeatPF, medianSpread };
+  }, [pledgeResult, customReturns, taxPEN, pledgeHorizon, withdrawalPct, PFPEN_IDX]);
+
   const runHeatmapSim = useCallback(() => {
     setHeatmapRunning(true);
     setTimeout(() => {
@@ -1477,9 +1630,10 @@ export default function Calculadora() {
               <div style={styles.modalSection}>
                 <div style={styles.modalSectionTitle}>Lo que va a generar</div>
                 <ul style={styles.modalList}>
-                  <li>σ anualizada, CAGR, β vs S&P 500, β vs EPU (Peru)</li>
-                  <li>VaR &amp; Expected Shortfall históricos al 95 % y 99 %</li>
-                  <li>Matriz de correlaciones 16×16 (los 11 reales con valores, los 5 sintéticos en 0 fuera de la diagonal)</li>
+                  <li><code style={styles.modalCode}>yfinance_results.json</code> — para cargar en esta calculadora con "Cargar JSON"</li>
+                  <li><code style={styles.modalCode}>yfinance_summary.csv</code> — 1 fila por activo con σ, CAGR, β vs S&P, β vs EPU, VaR/ES 95/99 (abre en Excel)</li>
+                  <li><code style={styles.modalCode}>yfinance_correlation.csv</code> — matriz 16×16 con labels en filas y columnas</li>
+                  <li><code style={styles.modalCode}>yfinance_prices.csv</code> — precios diarios crudos (~1700 filas × 11 columnas) por si quieres hacer tus propios gráficos en Excel</li>
                 </ul>
               </div>
 
@@ -1633,6 +1787,7 @@ export default function Calculadora() {
                                       it.kind === "value"  ? (t) => setValueAsset({ ...valueAsset, ticker: t }) : undefined}
                       onRangeChange={it.kind === "growth" ? (r) => setGrowthAsset({ ...growthAsset, ...r }) :
                                      it.kind === "value"  ? (r) => setValueAsset({ ...valueAsset, ...r }) : undefined}
+                      hasMarketData={!!marketData}
                     />
                   ))}
                 </div>
@@ -2185,6 +2340,60 @@ export default function Calculadora() {
                 )}
               </div>
 
+              {/* ============ Benchmark: Plazo Fijo PEN sin riesgo ============ */}
+              {pfBenchmark && (
+                <>
+                  <h3 style={styles.h3}>Umbral: ¿vale la pena el riesgo vs Plazo Fijo PEN?</h3>
+                  <p style={styles.distribIntro}>
+                    Si en lugar de pignorar dejaras los <strong>{fmtUsd(10000)}</strong> en Plazo Fijo PEN
+                    al <strong>{fmtPct(pfBenchmark.pfRatePreTax, 2)}</strong> bruto
+                    ({fmtPct(pfBenchmark.pfRateNet, 2)} neto post-tax {fmtPct(taxPEN, 0)})
+                    y retiraras los mismos <strong>{fmtUsd(pledgeResult.W)}/año</strong> durante {pledgeHorizon} años,
+                    el resultado sería determinístico (sin riesgo de margin call ni de mercado). Comparamos contra los
+                    3.000 paths simulados de la pignoración.
+                  </p>
+                  <div style={{
+                    ...styles.btMetricsGrid,
+                    gridTemplateColumns: "repeat(3, 1fr)",
+                    marginTop: 14,
+                  }}>
+                    <PignCard
+                      title="Patrimonio PF PEN final"
+                      value={fmtUsd(pfBenchmark.pfFinal)}
+                      caption={`Determinístico: $10k crece al ${fmtPct(pfBenchmark.pfRateNet, 2)}, menos $${pledgeResult.W.toFixed(0)}/año de retiros`}
+                      sub={`Este es el umbral a superar`}
+                    />
+                    <PignCard
+                      title="P(pignoración > PF PEN)"
+                      value={fmtPct(pfBenchmark.probBeatPF, 1)}
+                      color={
+                        pfBenchmark.probBeatPF > 0.75 ? "var(--positive)" :
+                        pfBenchmark.probBeatPF > 0.55 ? "var(--gold)" :
+                        "var(--negative)"
+                      }
+                      caption={
+                        pfBenchmark.probBeatPF > 0.85 ? "Vale claramente la pena · pignoración gana en >85% de escenarios" :
+                        pfBenchmark.probBeatPF > 0.65 ? "Pignoración gana en la mayoría · el riesgo paga" :
+                        pfBenchmark.probBeatPF > 0.45 ? "Mixto · no compensa el riesgo extra para el retorno marginal" :
+                        "El PF PEN supera a la pignoración · mejor quedarse seguro"
+                      }
+                      sub={`${Math.round(pfBenchmark.probBeatPF * 3000)}/3000 paths superan el umbral`}
+                    />
+                    <PignCard
+                      title="Exceso mediano"
+                      value={(pfBenchmark.medianSpread >= 0 ? "+" : "") + fmtUsd(pfBenchmark.medianSpread)}
+                      color={pfBenchmark.medianSpread > 0 ? "var(--positive)" : "var(--negative)"}
+                      caption={
+                        pfBenchmark.medianSpread > 0
+                          ? `En el escenario mediano, la pignoración termina ${fmtUsd(pfBenchmark.medianSpread)} arriba del PF PEN`
+                          : `En el escenario mediano, la pignoración termina ${fmtUsd(-pfBenchmark.medianSpread)} debajo del PF PEN`
+                      }
+                      sub={`Recompensa por correr el riesgo de mercado y margin call`}
+                    />
+                  </div>
+                </>
+              )}
+
               {/* Withdrawal sweep chart: P(margin call) vs retiro % */}
               <h3 style={styles.h3}>Sensibilidad: ¿cuánto puedo retirar al año?</h3>
               <p style={styles.distribIntro}>
@@ -2570,18 +2779,26 @@ function Stat({ label, value, accent }) {
   );
 }
 
-function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerChange, onRangeChange }) {
+function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerChange, onRangeChange, hasMarketData }) {
   const effRet = asset.isCash ? customRet * (1 - taxRate) : customRet;
   const retOutOfRange = customRet < asset.retLow || customRet > asset.retHigh;
-  // Per-asset slider range: 0 to max(retHigh*1.5, histRet*1.3, 5%)
-  const minRet = 0;
-  const maxRet = Math.max(asset.retHigh * 1.5, asset.histRet * 1.3, 0.06);
+  // Cuando hay marketData y la historica es positiva, el slider se centra en
+  // ella con rango [histRet x 0.5, histRet x 2.0] (-50% / +100% sobre histórica).
+  // Sino, mantiene el comportamiento legacy: rango fijo [0, max(retHigh*1.5, histRet*1.3, 6%)].
+  const useHistAnchor = hasMarketData && typeof asset.histRet === "number" && asset.histRet > 0.005;
+  const minRet = useHistAnchor ? asset.histRet * 0.5 : 0;
+  const maxRet = useHistAnchor
+    ? asset.histRet * 2.0
+    : Math.max(asset.retHigh * 1.5, asset.histRet * 1.3, 0.06);
   const step = 0.001;
   // Position % of reference markers on the slider track
   const pctOf = (v) => Math.max(0, Math.min(100, ((v - minRet) / (maxRet - minRet)) * 100));
   const pctLow = pctOf(asset.retLow);
   const pctHigh = pctOf(asset.retHigh);
   const pctHist = pctOf(asset.histRet);
+  // Mostrar Hist 10y siempre que exista y sea > 0; el placeholder "—" sólo
+  // aparece para growth/value sin marketData cargado (no tenemos histórica del ticker custom).
+  const showHist = (typeof asset.histRet === "number" && asset.histRet > 0) && (!asset.editable || hasMarketData);
   return (
     <div style={{
       ...styles.assetRow,
@@ -2615,8 +2832,8 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
         </div>
         <div style={styles.assetRefRow}>
           <span style={styles.refItem}>
-            Hist 10y: <strong>{asset.editable ? "—" : fmtPct(asset.histRet, 1)}</strong>
-            {asset.editable && <span style={styles.refPlaceholder}> (se calcula con datos reales)</span>}
+            Hist 10y: <strong>{showHist ? fmtPct(asset.histRet, 1) : "—"}</strong>
+            {!showHist && asset.editable && <span style={styles.refPlaceholder}> (se calcula con datos reales)</span>}
           </span>
           <span style={styles.refSep}>|</span>
           {asset.editable ? (
@@ -2667,7 +2884,7 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
           <div style={styles.retSliderWrap}>
             {/* Reference markers behind the slider */}
             <div style={styles.retSliderTrack}>
-              {!asset.editable && (
+              {showHist && (
                 <div style={{ ...styles.refMarkerHist, left: `${pctHist}%` }} title={`Hist 10y: ${fmtPct(asset.histRet, 2)}`} />
               )}
               <div style={{ ...styles.refMarkerLow, left: `${pctLow}%` }} title={`Range low: ${fmtPct(asset.retLow, 2)}`} />

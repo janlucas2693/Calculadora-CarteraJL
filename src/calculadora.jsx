@@ -15,15 +15,15 @@ const ASSETS = [
   // USD - Renta Variable
   { id: "cspx",  name: "ETF S&P 500 (CSPX/VUAA)",     cur: "USD", cat: "Renta Variable USD",   ret: 0.090, vol: 0.1803, minW: 0.10, maxW: 0.25, defW: 0.15, retLow: 0.08, retHigh: 0.10, histRet: 0.1662, isCash: false },
   { id: "cndx",  name: "ETF Nasdaq 100 (CNDX)",       cur: "USD", cat: "Renta Variable USD",   ret: 0.110, vol: 0.2207, minW: 0.05, maxW: 0.15, defW: 0.08, retLow: 0.10, retHigh: 0.12, histRet: 0.2258, isCash: false },
-  { id: "iwda",  name: "MSCI World 3000 (IWDA)",      cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
+  { id: "iwda",  name: "MSCI World ex-USA Acc (EXUS.L)", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
   { id: "msft",  name: "MSFT (Growth)",               cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
   { id: "uber",  name: "UBER (Value)",                cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
   // USD - Refugio
   { id: "igln",  name: "Oro (IGLN)",                  cur: "USD", cat: "Refugio / Commodities", ret: 0.050, vol: 0.1729, minW: 0.03, maxW: 0.10, defW: 0.05, retLow: 0.04, retHigh: 0.06, histRet: 0.1994, isCash: false },
   // USD - Renta Fija
-  { id: "vtc",   name: "Bonos Corporativos (VTC/LQD)",cur: "USD", cat: "Renta Fija USD",       ret: 0.050, vol: 0.0842, minW: 0.03, maxW: 0.15, defW: 0.06, retLow: 0.045, retHigh: 0.055, histRet: 0.0238, isCash: false },
-  { id: "bil",   name: "Treasury 0-3M (BIL)",         cur: "USD", cat: "Renta Fija USD",       ret: 0.0475, vol: 0.00, minW: 0.02, maxW: 0.10, defW: 0.04, retLow: 0.045, retHigh: 0.050, histRet: 0.0270, isCash: true },
-  { id: "ief",   name: "Treasury 10Y (IEF)",          cur: "USD", cat: "Renta Fija USD",       ret: 0.0425, vol: 0.0743, minW: 0.03, maxW: 0.12, defW: 0.06, retLow: 0.040, retHigh: 0.045, histRet: 0.0063, isCash: false },
+  { id: "vtc",   name: "Bonos Corp Acc (LQDA.L)",     cur: "USD", cat: "Renta Fija USD",       ret: 0.050, vol: 0.0842, minW: 0.03, maxW: 0.15, defW: 0.06, retLow: 0.045, retHigh: 0.055, histRet: 0.0238, isCash: false },
+  { id: "bil",   name: "Treasury 0-1Y Acc (ZPR1.L)",  cur: "USD", cat: "Renta Fija USD",       ret: 0.0475, vol: 0.00, minW: 0.02, maxW: 0.10, defW: 0.04, retLow: 0.045, retHigh: 0.050, histRet: 0.0270, isCash: true },
+  { id: "ief",   name: "Treasury 7-10Y Acc (CBU7.L)", cur: "USD", cat: "Renta Fija USD",       ret: 0.0425, vol: 0.0743, minW: 0.03, maxW: 0.12, defW: 0.06, retLow: 0.040, retHigh: 0.045, histRet: 0.0063, isCash: false },
   // USD - Especulativo
   { id: "btc",   name: "Bitcoin",                     cur: "USD", cat: "Especulativo",         ret: 0.200, vol: 0.6439, minW: 0.05, maxW: 0.05, defW: 0.05, retLow: 0.15, retHigh: 0.25, histRet: 0.4416, isCash: false },
   // USD - Cash
@@ -46,8 +46,8 @@ const DATA_META = {
   years: 7.03,
   days: 1722,
   tickersUsed: {
-    cspx: "CSPX.L", cndx: "CNDX.L", iwda: "IWDA.AS", msft: "MSFT", uber: "UBER",
-    igln: "IGLN.L", vtc: "VTC", bil: "BIL", ief: "IEF", btc: "BTC-USD", epu: "EPU"
+    cspx: "CSPX.L", cndx: "CNDX.L", iwda: "EXUS.L", msft: "MSFT", uber: "UBER",
+    igln: "IGLN.L", vtc: "LQDA.L", bil: "ZPR1.L", ief: "CBU7.L", btc: "BTC-USD", epu: "EPU"
   },
   // BIL has real σ of 0.26% but kept at 0 per user's modeling decision (cash = zero risk)
   // pensov correlations are synthetic (no public Peru sovereign bond ticker that aligned)
@@ -298,6 +298,194 @@ function compareToBenchmark(portRet, benchRet) {
   return { TE, IR, annualizedAlpha };
 }
 
+// ============================================================
+// WALK-FORWARD BACKTEST HELPERS
+// ============================================================
+// Computa σ (anualizada) y matriz de correlación de una ventana de retornos
+// mensuales. Robusto a activos sintéticos con σ=0 (devuelve correlación 0 con ellos).
+function windowSigmaCorr(monthlyReturns, fromIdx, toIdx) {
+  const n = monthlyReturns[0].length;
+  const k = toIdx - fromIdx;
+  if (k < 2) return null;
+  // Mean of each column
+  const mean = new Array(n).fill(0);
+  for (let m = fromIdx; m < toIdx; m++) {
+    for (let i = 0; i < n; i++) mean[i] += monthlyReturns[m][i];
+  }
+  for (let i = 0; i < n; i++) mean[i] /= k;
+  // Covariance matrix (population, divided by k)
+  const cov = Array.from({ length: n }, () => new Array(n).fill(0));
+  for (let m = fromIdx; m < toIdx; m++) {
+    const row = monthlyReturns[m];
+    for (let i = 0; i < n; i++) {
+      const di = row[i] - mean[i];
+      for (let j = 0; j <= i; j++) {
+        cov[i][j] += di * (row[j] - mean[j]);
+      }
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= i; j++) {
+      cov[i][j] /= k;
+      if (i !== j) cov[j][i] = cov[i][j];
+    }
+  }
+  // σ monthly → annualized
+  const sigma_m = new Array(n);
+  for (let i = 0; i < n; i++) sigma_m[i] = Math.sqrt(Math.max(cov[i][i], 0));
+  const sigma_a = sigma_m.map((s) => s * Math.sqrt(12));
+  // Correlation from cov
+  const corr = Array.from({ length: n }, () => new Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    corr[i][i] = 1;
+    for (let j = 0; j < i; j++) {
+      if (sigma_m[i] === 0 || sigma_m[j] === 0) {
+        corr[i][j] = 0;
+        corr[j][i] = 0;
+      } else {
+        const c = cov[i][j] / (sigma_m[i] * sigma_m[j]);
+        // Clamp para evitar errores numéricos
+        const cc = Math.max(-1, Math.min(1, c));
+        corr[i][j] = cc;
+        corr[j][i] = cc;
+      }
+    }
+  }
+  return { sigma: sigma_a, corr };
+}
+
+// Beta de una serie de retornos vs benchmark (slope de OLS univariado)
+function computeBeta(portRet, bmRet) {
+  if (portRet.length < 2 || portRet.length !== bmRet.length) return NaN;
+  const n = portRet.length;
+  let meanP = 0, meanB = 0;
+  for (let i = 0; i < n; i++) { meanP += portRet[i]; meanB += bmRet[i]; }
+  meanP /= n; meanB /= n;
+  let cov = 0, varB = 0;
+  for (let i = 0; i < n; i++) {
+    const db = bmRet[i] - meanB;
+    cov += (portRet[i] - meanP) * db;
+    varB += db * db;
+  }
+  return varB > 0 ? cov / varB : NaN;
+}
+
+// Walk-forward backtest principal
+//   - "Hoy hold": pesos baseWeights (los actuales del Markowitz full-period), held constant
+//   - "Walk-forward": en cada punto de rebalanceo, σ y corr de la ventana trailing,
+//     μ = customReturns (fijo), corre Markowitz robusto, aplica pesos hasta próximo rebal
+//   - "Benchmark S&P": serie de monthly_returns[spIndex] acumulada
+function runWalkForwardBacktest({
+  monthlyReturns,
+  monthlyDates,
+  customReturns,
+  effectiveAssets,
+  baseWeights,
+  rebalanceFreqMonths = 3,
+  trailingWindow = 24,
+  enforceMinFloors = false,
+  nSamplesPerOpt = 4000,
+  V0 = 10000,
+  spIndex = 0,  // cspx is at index 0
+}) {
+  const T = monthlyReturns.length;
+  const N = monthlyReturns[0].length;
+  const startMonth = trailingWindow;
+  if (T <= startMonth + 2) return null;
+
+  // Assets para el optimizador (sin pisos por default)
+  const optAssetsBase = enforceMinFloors
+    ? effectiveAssets
+    : effectiveAssets.map((a) => ({ ...a, minW: 0 }));
+
+  const dates = [monthlyDates[startMonth]];
+  const wfEquity = [V0];
+  const holdEquity = [V0];
+  const spEquity = [V0];
+  const wfWeightsHistory = []; // Para auditoría: array de {date, weights}
+
+  let currentWF_w = null;
+  let lastRebalMonth = -Infinity;
+  let nReopt = 0;
+
+  for (let t = startMonth; t < T; t++) {
+    const shouldRebal =
+      currentWF_w === null || (t - lastRebalMonth) >= rebalanceFreqMonths;
+
+    if (shouldRebal) {
+      const wnd = windowSigmaCorr(monthlyReturns, t - trailingWindow, t);
+      if (!wnd) break;
+      // Sustituye σ por el de la ventana en cada asset
+      const tempAssets = optAssetsBase.map((a, i) => ({ ...a, vol: wnd.sigma[i] }));
+      const result = runMarkowitz(customReturns, nSamplesPerOpt, tempAssets, wnd.corr);
+      currentWF_w = result.neutra.w;
+      lastRebalMonth = t;
+      nReopt++;
+      wfWeightsHistory.push({ date: monthlyDates[t], weights: currentWF_w.slice() });
+    }
+
+    // Apply month t's returns
+    let r_wf = 0, r_hold = 0;
+    for (let i = 0; i < N; i++) {
+      r_wf += currentWF_w[i] * monthlyReturns[t][i];
+      r_hold += baseWeights[i] * monthlyReturns[t][i];
+    }
+    const r_sp = monthlyReturns[t][spIndex];
+
+    dates.push(monthlyDates[t]);
+    wfEquity.push(wfEquity[wfEquity.length - 1] * (1 + r_wf));
+    holdEquity.push(holdEquity[holdEquity.length - 1] * (1 + r_hold));
+    spEquity.push(spEquity[spEquity.length - 1] * (1 + r_sp));
+  }
+
+  // Compute monthly returns from equity curves
+  const monthlyRet = (eq) => {
+    const r = [];
+    for (let i = 1; i < eq.length; i++) r.push(eq[i] / eq[i - 1] - 1);
+    return r;
+  };
+  const wfMR = monthlyRet(wfEquity);
+  const holdMR = monthlyRet(holdEquity);
+  const spMR = monthlyRet(spEquity);
+
+  // Metrics per line
+  const meanMR = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  const stdMR = (arr) => {
+    const m = meanMR(arr);
+    return Math.sqrt(arr.reduce((a, r) => a + (r - m) ** 2, 0) / arr.length);
+  };
+  const computeMetrics = (eq, mr, isBenchmark = false) => {
+    const yrs = mr.length / 12;
+    const cagr = Math.pow(eq[eq.length - 1] / V0, 1 / yrs) - 1;
+    const vol = stdMR(mr) * Math.sqrt(12);
+    const sharpe = vol > 0 ? (cagr - RISK_FREE) / vol : 0;
+    // Max drawdown
+    let peak = -Infinity, maxDD = 0;
+    for (const v of eq) {
+      if (v > peak) peak = v;
+      const dd = v / peak - 1;
+      if (dd < maxDD) maxDD = dd;
+    }
+    const beta = isBenchmark ? 1 : computeBeta(mr, spMR);
+    return { finalV: eq[eq.length - 1], cagr, vol, sharpe, maxDD, beta };
+  };
+
+  return {
+    dates,
+    wfEquity, holdEquity, spEquity,
+    wfMonthly: wfMR, holdMonthly: holdMR, spMonthly: spMR,
+    wfWeightsHistory,
+    finalWF_w: currentWF_w,
+    baseWeights: baseWeights.slice(),
+    nReopt,
+    metrics: {
+      wf: computeMetrics(wfEquity, wfMR),
+      hold: computeMetrics(holdEquity, holdMR),
+      sp: computeMetrics(spEquity, spMR, true),
+    },
+  };
+}
+
 // 1-year parametric VaR & Expected Shortfall (loss-positive convention)
 function riskMetrics(mu, sigma, alpha) {
   // VaR = -(mu - z*sigma) at confidence alpha (e.g. 0.95)
@@ -415,81 +603,164 @@ function maxSustainableWithdrawal({ paths, ltv0, intRate, marginCallLTV, T, tolP
 // Returns yearly statistics (V_p10/p50/p90, LTV_p10/p50/p90, loan)
 // plus headline metrics (P(MC), total interest, net patrimony).
 // ============================================================
-function runFullPledgeSim({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCallLTV, withdrawalPct, N = 3000 }) {
-  const W = V0 * withdrawalPct;
+// ============================================================
+// ENDOWMENT WITHDRAWAL RULE (5 escenarios)
+// Multiplicador del retiro basado en el comportamiento de la cartera:
+//   * Crisis (DD vs peak <= -25%)              → 0.80
+//   * Caída material (DD entre -25% y -10%)    → 0.90
+//   * Normal (DD entre -10% y 0, sin nuevo peak) → 1.00
+//   * Buen año (nuevo peak, YoY 5% a 20%)      → 1.10
+//   * Año extraordinario (nuevo peak, YoY > 20%) → 1.20
+// ============================================================
+const WITHDRAWAL_SCENARIOS = [
+  { key: "crisis",   label: "Crisis",            mult: 0.80, ddMax: -0.25, ddMin: -Infinity, color: "#7a1b1b" },
+  { key: "caida",    label: "Caída material",    mult: 0.90, ddMax: -0.10, ddMin: -0.25,     color: "#c97a2e" },
+  { key: "normal",   label: "Normal",            mult: 1.00, ddMax: 0,     ddMin: -0.10,     color: "var(--ink)" },
+  { key: "bueno",    label: "Buen año",          mult: 1.10, yoyMin: 0.05, yoyMax: 0.20, requiresNewPeak: true, color: "#5a9d6e" },
+  { key: "extraord", label: "Año extraordinario",mult: 1.20, yoyMin: 0.20, yoyMax: Infinity, requiresNewPeak: true, color: "var(--gold)" },
+];
+
+function classifyWithdrawalScenario(V_t, V_prev, peak_prev) {
+  const yoy = V_t / V_prev - 1;
+  const dd  = V_t / peak_prev - 1;
+  const newPeak = V_t >= peak_prev;
+  const eps = 1e-9; // epsilon for floating-point threshold comparisons
+  if (dd <= -0.25 + eps) return { key: "crisis",   mult: 0.80 };
+  if (dd <= -0.10 + eps) return { key: "caida",    mult: 0.90 };
+  if (newPeak && yoy >= 0.20 - eps) return { key: "extraord", mult: 1.20 };
+  if (newPeak && yoy >= 0.05 - eps) return { key: "bueno",    mult: 1.10 };
+  return { key: "normal", mult: 1.00 };
+}
+
+// Pignoración: simulación path-dependent del loan y patrimonio neto.
+//   withdrawalMode = "endowment" (default):
+//     W_t = withdrawalPct × V_t × multiplicador(escenario)
+//   withdrawalMode = "flat":
+//     W_t = V0 × withdrawalPct (constante)
+function runFullPledgeSim({
+  mu, sigma, T, V0 = 10000,
+  ltv0, intRate, marginCallLTV,
+  withdrawalPct, withdrawalMode = "endowment",
+  N = 3000,
+}) {
   const Loan0 = V0 * ltv0;
-  // Generate portfolio paths
   const paths = simulatePaths({ mu, sigma, T, N, V0 });
-  // Loan path is deterministic (independent of portfolio path)
-  const loanPath = [Loan0];
-  for (let t = 1; t <= T; t++) {
-    loanPath.push(loanPath[t - 1] * (1 + intRate) + W);
+  // Per-path loan y W_t (ahora dependen del path)
+  // loanPaths[s][t] = saldo del loan al final del año t para path s
+  // wPaths[s][t]    = retiro hecho en el año t para path s (t >= 1)
+  // scenarioCounts  = histograma de escenarios atravesados (todos los paths × todos los años)
+  const loanPaths = new Array(N);
+  const wPaths = new Array(N);
+  const scenarioCounts = { crisis: 0, caida: 0, normal: 0, bueno: 0, extraord: 0 };
+  let mcCount = 0;
+  const mcTimes = [];
+
+  for (let s = 0; s < N; s++) {
+    const V_path = paths[s];
+    const loanArr = new Array(T + 1);
+    const wArr = new Array(T + 1);
+    loanArr[0] = Loan0;
+    wArr[0] = 0;
+    let peak = V0;
+    let triggered = false;
+    for (let t = 1; t <= T; t++) {
+      const V_t = V_path[t];
+      const V_prev = V_path[t - 1];
+      let W_t;
+      if (withdrawalMode === "endowment") {
+        const cls = classifyWithdrawalScenario(V_t, V_prev, peak);
+        scenarioCounts[cls.key]++;
+        W_t = withdrawalPct * V_t * cls.mult;
+      } else {
+        W_t = V0 * withdrawalPct;
+      }
+      wArr[t] = W_t;
+      loanArr[t] = loanArr[t - 1] * (1 + intRate) + W_t;
+      if (V_t > peak) peak = V_t;
+      if (!triggered && loanArr[t] / V_t > marginCallLTV) {
+        triggered = true;
+        mcCount++;
+        mcTimes.push(t);
+      }
+    }
+    loanPaths[s] = loanArr;
+    wPaths[s] = wArr;
   }
-  // Per-year percentile aggregation
+
+  // Per-year stats: V, loan, LTV (todos path-dependent ahora)
   const yearStats = [];
   for (let t = 0; t <= T; t++) {
-    const vValues = new Array(N);
-    for (let s = 0; s < N; s++) vValues[s] = paths[s][t];
-    vValues.sort((a, b) => a - b);
-    const p10v = vValues[Math.floor(N * 0.10)];
-    const p50v = vValues[Math.floor(N * 0.50)];
-    const p90v = vValues[Math.floor(N * 0.90)];
-    const ltvs = vValues.map(v => loanPath[t] / v);
-    ltvs.sort((a, b) => a - b);
-    const p10ltv = ltvs[Math.floor(N * 0.10)];
-    const p50ltv = ltvs[Math.floor(N * 0.50)];
-    const p90ltv = ltvs[Math.floor(N * 0.90)];
+    const vValues = new Array(N), loanValues = new Array(N), ltvs = new Array(N), wValues = new Array(N);
+    for (let s = 0; s < N; s++) {
+      vValues[s] = paths[s][t];
+      loanValues[s] = loanPaths[s][t];
+      ltvs[s] = vValues[s] > 0 ? loanValues[s] / vValues[s] : Infinity;
+      wValues[s] = wPaths[s][t];
+    }
+    const pctile = (arr, p) => {
+      const sorted = arr.slice().sort((a, b) => a - b);
+      return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+    };
     yearStats.push({
       year: t,
-      v_p10: p10v, v_p50: p50v, v_p90: p90v,
-      v_band_base: p10v,
-      v_band_width: p90v - p10v,
-      loan: loanPath[t],
-      ltv_p10: p10ltv * 100, ltv_p50: p50ltv * 100, ltv_p90: p90ltv * 100,
-      ltv_band_base: p10ltv * 100,
-      ltv_band_width: (p90ltv - p10ltv) * 100,
+      v_p10: pctile(vValues, 0.10), v_p50: pctile(vValues, 0.50), v_p90: pctile(vValues, 0.90),
+      loan_p10: pctile(loanValues, 0.10), loan_p50: pctile(loanValues, 0.50), loan_p90: pctile(loanValues, 0.90),
+      ltv_p10: pctile(ltvs, 0.10) * 100, ltv_p50: pctile(ltvs, 0.50) * 100, ltv_p90: pctile(ltvs, 0.90) * 100,
+      w_p10: pctile(wValues, 0.10), w_p50: pctile(wValues, 0.50), w_p90: pctile(wValues, 0.90),
+      v_band_base: pctile(vValues, 0.10),
+      v_band_width: pctile(vValues, 0.90) - pctile(vValues, 0.10),
+      ltv_band_base: pctile(ltvs, 0.10) * 100,
+      ltv_band_width: (pctile(ltvs, 0.90) - pctile(ltvs, 0.10)) * 100,
+      loan: pctile(loanValues, 0.50), // median for backwards compat with old chart code
       marginCallLine: marginCallLTV * 100,
     });
   }
-  // P(margin call): path-level simulation
-  let mcCount = 0;
-  const mcTimes = [];
-  for (let s = 0; s < N; s++) {
-    let loan = Loan0;
-    for (let t = 1; t <= T; t++) {
-      loan = loan * (1 + intRate) + W;
-      if (loan / paths[s][t] > marginCallLTV) {
-        mcCount++;
-        mcTimes.push(t);
-        break;
-      }
-    }
-  }
+
   const mcProb = mcCount / N;
   const avgMCTime = mcTimes.length > 0 ? mcTimes.reduce((a, b) => a + b, 0) / mcTimes.length : null;
-
-  const finalLoan = loanPath[T];
-  const totalCashWithdrawn = W * T;
-  const totalInterest = finalLoan - Loan0 - totalCashWithdrawn;
   const final = yearStats[T];
 
-  // Patrimonio neto final por path (necesario para comparar contra benchmarks)
+  // Patrimonio neto final por path
   const netPatrimoniesFinal = new Array(N);
+  let totalCashWithdrawn_p50 = 0, totalInterest_p50 = 0;
   for (let s = 0; s < N; s++) {
-    netPatrimoniesFinal[s] = paths[s][T] - finalLoan;
+    netPatrimoniesFinal[s] = paths[s][T] - loanPaths[s][T];
+  }
+  // Median path metrics for headline display
+  const medianLoanFinal = final.loan_p50;
+  // Total cash withdrawn (median, summed across years)
+  const wSums = new Array(N);
+  for (let s = 0; s < N; s++) {
+    let sum = 0;
+    for (let t = 1; t <= T; t++) sum += wPaths[s][t];
+    wSums[s] = sum;
+  }
+  wSums.sort((a, b) => a - b);
+  totalCashWithdrawn_p50 = wSums[Math.floor(N * 0.5)];
+  totalInterest_p50 = medianLoanFinal - Loan0 - totalCashWithdrawn_p50;
+
+  // Normalize scenario counts to frequencies
+  const totalScenSteps = N * T;
+  const scenarioFreq = {};
+  for (const k in scenarioCounts) {
+    scenarioFreq[k] = totalScenSteps > 0 ? scenarioCounts[k] / totalScenSteps : 0;
   }
 
   return {
     yearStats,
-    W, Loan0,
+    Loan0,
+    withdrawalMode,
     mcProb, avgMCTime,
-    totalCashWithdrawn,
-    totalInterest,
-    finalLoan,
-    netPatrimony_p10: final.v_p10 - finalLoan,
-    netPatrimony_p50: final.v_p50 - finalLoan,
-    netPatrimony_p90: final.v_p90 - finalLoan,
+    totalCashWithdrawn: totalCashWithdrawn_p50,
+    totalInterest: totalInterest_p50,
+    finalLoan: medianLoanFinal,
+    netPatrimony_p10: final.v_p10 - final.loan_p90, // conservative: low V, high loan
+    netPatrimony_p50: final.v_p50 - final.loan_p50,
+    netPatrimony_p90: final.v_p90 - final.loan_p10, // optimistic: high V, low loan
     netPatrimoniesFinal,
+    scenarioFreq,
+    // Backwards-compat fields used elsewhere in code
+    W: V0 * withdrawalPct, // nominal "target" withdrawal (informativo)
   };
 }
 
@@ -870,13 +1141,13 @@ ASSET_NAMES = {
 REAL_TICKERS = [
     ("cspx", "CSPX.L",  "IVV"),
     ("cndx", "CNDX.L",  "QQQ"),
-    ("iwda", "IWDA.AS", "URTH"),
+    ("iwda", "EXUS.L",  "URTH"),
     ("msft", GROWTH_TICKER, None),
     ("uber", VALUE_TICKER,  None),
     ("igln", "IGLN.L",  "GLD"),
-    ("vtc",  "VTC",     "LQD"),
-    ("bil",  "BIL",     None),
-    ("ief",  "IEF",     None),
+    ("vtc",  "LQDA.L",  "LQD"),
+    ("bil",  "ZPR1.L",  "IB01.L"),
+    ("ief",  "CBU7.L",  "SXXB.L"),
     ("btc",  "BTC-USD", None),
     ("epu",  "EPU",     None),
 ]
@@ -1170,6 +1441,10 @@ export default function Calculadora() {
 
   // Editable returns + tax assumptions (PRIMARY INPUTS to Markowitz)
   const [customReturns, setCustomReturns] = useState(() => ASSETS.map(a => a.ret));
+  // Flag: true cuando el usuario movió manualmente el slider de algún activo.
+  // Mientras sea false, customReturns sigue auto-sincronizado con marketData
+  // (midpoint entre consenso analistas y Damodaran). Una vez true, se respeta lo del usuario.
+  const [customReturnsUserEdited, setCustomReturnsUserEdited] = useState(false);
   const [taxUSD, setTaxUSD] = useState(0.25);
   const [taxPEN, setTaxPEN] = useState(0.05);
 
@@ -1200,16 +1475,33 @@ export default function Calculadora() {
 
 
   // Effective asset universe: overrides idx 3, 4 with user-defined tickers/ranges,
-  // and applies vol/histRet from marketData (if loaded) to ALL assets.
+  // and applies vol/histRet/damodaran/analystConsensus/hist1yMin from marketData (if loaded).
   // Key insight: the asset id (cspx, cndx, ...) is used to look up values in marketData.
   const effectiveAssets = useMemo(() => {
     return ASSETS.map((a, i) => {
       const baseKey = a.id; // 'cspx', 'cndx', 'msft', etc. — keys originales canonicos
       let asset = { ...a };
-      // Apply marketData (real yfinance values) to vol and histRet
+      // Fallbacks si NO hay marketData: usar retLow/ret/retHigh como consenso proxy,
+      // ret como Damodaran. hist1yMin se queda undefined (no inventamos data histórica).
+      asset.consensusLow  = a.retLow;
+      asset.consensusMean = a.ret;
+      asset.consensusHigh = a.retHigh;
+      asset.damodaran     = a.ret;
+      asset.hist1yMin     = undefined;
+      asset.consensusSource = undefined;
+      // Apply marketData (real yfinance values) — overrides fallbacks
       if (marketData) {
         if (typeof marketData.sigma?.[baseKey] === "number") asset.vol = marketData.sigma[baseKey];
         if (typeof marketData.histRet?.[baseKey] === "number") asset.histRet = marketData.histRet[baseKey];
+        if (typeof marketData.damodaran?.[baseKey] === "number") asset.damodaran = marketData.damodaran[baseKey];
+        if (typeof marketData.hist_1y_min?.[baseKey] === "number") asset.hist1yMin = marketData.hist_1y_min[baseKey];
+        if (marketData.analyst_consensus?.[baseKey]) {
+          const c = marketData.analyst_consensus[baseKey];
+          if (typeof c.low  === "number") asset.consensusLow  = c.low;
+          if (typeof c.mean === "number") asset.consensusMean = c.mean;
+          if (typeof c.high === "number") asset.consensusHigh = c.high;
+          asset.consensusSource = c.source;
+        }
       }
       // Override growth/value editable slots
       if (i === 3) return {
@@ -1237,6 +1529,37 @@ export default function Calculadora() {
   // Effective correlation matrix: from marketData if loaded, else from the hardcoded C.
   const effectiveC = useMemo(() => marketData?.correlation || C, [marketData]);
 
+  // ==========================================================
+  // DEFAULT RATE PER ASSET
+  // Promedio simple de: consenso neutral + Damodaran + histórica 10y.
+  // Si falta alguno, promedia los que haya. Si no hay ninguno, cae a asset.ret.
+  // ==========================================================
+  const defaultReturnFor = (asset) => {
+    const vals = [];
+    if (typeof asset.consensusMean === "number" && isFinite(asset.consensusMean)) vals.push(asset.consensusMean);
+    if (typeof asset.damodaran    === "number" && isFinite(asset.damodaran))    vals.push(asset.damodaran);
+    if (typeof asset.histRet      === "number" && isFinite(asset.histRet))      vals.push(asset.histRet);
+    if (vals.length === 0) return asset.ret;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  };
+
+  // Cuando llega marketData (carga inicial o nuevo JSON), si el usuario no ha
+  // tocado los sliders, sincronizamos customReturns a los midpoints automáticos.
+  useEffect(() => {
+    if (!marketData) return;
+    if (customReturnsUserEdited) return;
+    const newDefaults = effectiveAssets.map(defaultReturnFor);
+    setCustomReturns(newDefaults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marketData, effectiveAssets, customReturnsUserEdited]);
+
+  // Reset manual: restaura los defaults automáticos y "olvida" las ediciones.
+  const resetReturnsToAutoDefault = useCallback(() => {
+    const newDefaults = effectiveAssets.map(defaultReturnFor);
+    setCustomReturns(newDefaults);
+    setCustomReturnsUserEdited(false);
+  }, [effectiveAssets]);
+
   // Data fetch state — symbolic for now, real fetch happens via the chat workflow
   const [dataPanelOpen, setDataPanelOpen] = useState(false);
 
@@ -1259,6 +1582,17 @@ export default function Calculadora() {
   const [markowitzRunning, setMarkowitzRunning] = useState(false);
   const [activePortfolio, setActivePortfolio] = useState("neutra");  // 'conservadora' | 'neutra' | 'agresiva'
   const [returnsAtLastOpt, setReturnsAtLastOpt] = useState(null);    // for stale detection
+  // ROBUST OPTIMIZATION: por default no se exigen pisos mínimos por activo
+  // (el optimizador puede dejar activos en 0% si no aportan). Toggle ON
+  // recupera el comportamiento viejo con pisos.
+  const [enforceMinFloors, setEnforceMinFloors] = useState(false);
+
+  // Vista derivada de los assets que se pasa al optimizador:
+  // si robusto está activo (default), minW=0 para todos los activos. maxW se respeta siempre.
+  const effectiveAssetsForOpt = useMemo(() => {
+    if (enforceMinFloors) return effectiveAssets;
+    return effectiveAssets.map(a => ({ ...a, minW: 0 }));
+  }, [effectiveAssets, enforceMinFloors]);
 
   // Backtesting state
   const [rebalanceFreq, setRebalanceFreq] = useState(3);
@@ -1296,12 +1630,12 @@ export default function Calculadora() {
     setMarkowitzRunning(true);
     const snapshot = customReturns.slice();
     setTimeout(() => {
-      const result = runMarkowitz(effectiveReturns, 30000, effectiveAssets, effectiveC);
+      const result = runMarkowitz(effectiveReturns, 30000, effectiveAssetsForOpt, effectiveC);
       setMarkowitz(result);
       setReturnsAtLastOpt(snapshot);
       setMarkowitzRunning(false);
     }, 50);
-  }, [effectiveReturns, customReturns, effectiveAssets, effectiveC]);
+  }, [effectiveReturns, customReturns, effectiveAssetsForOpt, effectiveC]);
 
   // Auto-run optimizer on first mount so the user has weights immediately
   useEffect(() => {
@@ -1311,23 +1645,39 @@ export default function Calculadora() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Re-optimizar al cambiar el toggle de pisos mínimos (cambia la frontera).
+  // Se omite la primera corrida (manejada por el effect de arriba).
+  useEffect(() => {
+    if (markowitz && !markowitzRunning) {
+      runOptimizer();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enforceMinFloors]);
+
   const runBacktestSim = useCallback(() => {
+    if (!marketData?.monthly_returns || !marketData?.monthly_dates) {
+      alert("Backtest walk-forward requiere monthly_returns en el JSON cargado.\n\nCarga el yfinance_results.json generado por el download_data.py actualizado.");
+      return;
+    }
     setBacktestRunning(true);
     setTimeout(() => {
-      const months = backtestYears * 12;
-      const series = generateMonthlyHistory(effectiveReturns, months, effectiveAssets, effectiveC);
-      const portfolio = runBacktest({ weights, monthlyReturns: series, rebalanceFreqMonths: rebalanceFreq });
-      // Compute USD/PEN split for the benchmark
-      let usdW = 0, penW = 0;
-      for (let i = 0; i < N; i++) {
-        if (ASSETS[i].cur === "USD") usdW += weights[i]; else penW += weights[i];
-      }
-      const benchmark = runBenchmark({ usdWeight: usdW, penWeight: penW, monthlyReturns: series });
-      const compare = compareToBenchmark(portfolio.monthlyReturns, benchmark.monthlyReturns);
-      setBacktestResult({ portfolio, benchmark, compare, years: backtestYears, rebFreq: rebalanceFreq });
+      const spIdx = marketData.asset_keys?.indexOf("cspx") ?? 0;
+      const result = runWalkForwardBacktest({
+        monthlyReturns: marketData.monthly_returns,
+        monthlyDates: marketData.monthly_dates,
+        customReturns: effectiveReturns,
+        effectiveAssets: effectiveAssets,
+        baseWeights: weights,
+        rebalanceFreqMonths: rebalanceFreq,
+        trailingWindow: 24,
+        enforceMinFloors: enforceMinFloors,
+        nSamplesPerOpt: 4000,
+        spIndex: spIdx,
+      });
+      setBacktestResult(result);
       setBacktestRunning(false);
     }, 50);
-  }, [effectiveReturns, weights, rebalanceFreq, backtestYears, effectiveAssets, effectiveC]);
+  }, [marketData, effectiveReturns, weights, rebalanceFreq, effectiveAssets, enforceMinFloors]);
 
   // ----- Portfolio metrics -----
   const { mu, sigma } = useMemo(
@@ -1809,12 +2159,167 @@ export default function Calculadora() {
       {/* ============== TAB: CARTERA ============== */}
       {tab === "cartera" && (
         <section style={styles.section}>
-          <div style={styles.taxPanel}>
-            <div style={styles.taxPanelLabel}>
-              <span style={styles.taxPanelIcon}>⚙</span>
-              Impuestos sobre rendimientos realizados <span style={styles.taxPanelHint}>(solo cash & equivalentes, plazos fijos)</span>
+
+          {/* ====== 1. CAJA HORIZONTAL DE METRICAS DE RIESGO (despues del banner JSON) ====== */}
+          <div style={styles.metricsHorizontalBox}>
+            <div style={styles.metricsHorizontalHeader}>
+              <h3 style={styles.metricsHorizontalTitle}>Métricas de Riesgo · Cartera {activePortfolio}</h3>
+              <div style={styles.metricsHorizontalSub}>
+                Computadas sobre los pesos Markowitz actuales y tus rentabilidades efectivas (post-impuestos en cash/PF).
+              </div>
             </div>
-            <div style={styles.taxInputs}>
+            <div style={styles.metricsHorizontalGrid}>
+              <MetricCardCompact label="Retorno μ" value={fmtPct(mu, 2)} sub="ponderado" />
+              <MetricCardCompact label="Volatilidad σ" value={fmtPct(sigma, 2)} sub="anualizada" />
+              <MetricCardCompact label="Sharpe" value={sharpe.toFixed(2)} sub={`Rf ${fmtPct(RISK_FREE, 1)}`} />
+              <MetricCardCompact label="β efectivo" value={beta.toFixed(2)} sub="vs S&P + EPU" />
+              <MetricCardCompact label="VaR 95%" value={fmtPct(var95.VaR, 2)} sub="1 año" accent="negative" />
+              <MetricCardCompact label="VaR 99%" value={fmtPct(var99.VaR, 2)} sub="1 año" accent="negative" />
+              <MetricCardCompact label="ES 95%" value={fmtPct(var95.ES, 2)} sub="cola izquierda" accent="negative" />
+              <MetricCardCompact label="ES 99%" value={fmtPct(var99.ES, 2)} sub="cola izquierda" accent="negative" />
+            </div>
+          </div>
+
+          {/* ====== 2. CARTERA: HEADER + SWITCH + SLIDERS (ancho completo) ====== */}
+          <div style={styles.cardHeader}>
+            <div>
+              <h2 style={{ ...styles.h2, marginBottom: 4 }}>Sensibilizar Rentabilidades Esperadas</h2>
+              <div style={styles.compositionHint}>
+                Los <strong>pesos</strong> vienen del optimizador Markowitz (no editables aquí).
+                Mueve la rentabilidad de cada activo arrastrando el thumb (rojo) o haciendo click en cualquier umbral.
+                El default es el promedio simple de: consenso neutral · Damodaran · histórica 10y.
+              </div>
+            </div>
+            <div style={styles.portfolioSwitcher}>
+              <div style={styles.portfolioSwitcherLabel}>Cartera Markowitz activa</div>
+              <div style={styles.portfolioSwitcherButtons}>
+                {[
+                  ["conservadora", "Conservadora", "var(--positive)"],
+                  ["neutra", "Neutra", "var(--gold)"],
+                  ["agresiva", "Agresiva", "var(--accent)"],
+                ].map(([k, label, color]) => (
+                  <button
+                    key={k}
+                    onClick={() => setActivePortfolio(k)}
+                    disabled={!markowitz}
+                    style={{
+                      ...styles.portfolioBtn,
+                      ...(activePortfolio === k ? { ...styles.portfolioBtnActive, background: color, borderColor: color } : {}),
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Robust toggle + Reset rentabilidades */}
+          <div style={styles.cartControlBar}>
+            <label style={styles.robustToggleLabel}>
+              <input
+                type="checkbox"
+                checked={!enforceMinFloors}
+                onChange={(e) => setEnforceMinFloors(!e.target.checked)}
+                style={{ marginRight: 8 }}
+              />
+              <strong>Markowitz robusto</strong>
+              <span style={styles.robustToggleHint}>
+                Permite que el optimizador descarte activos completamente (min = 0%).
+                Apaga para forzar pisos mínimos por activo.
+              </span>
+            </label>
+            <button
+              onClick={resetReturnsToAutoDefault}
+              style={styles.resetRetBtn}
+              title="Restaurar todas las rentabilidades al promedio simple de consenso neutral + Damodaran + histórica 10y"
+            >
+              ↻ Reset a promedio (consenso/Damodaran/hist)
+            </button>
+          </div>
+
+          {(optStale || !markowitz) && (
+            <div style={{
+              ...styles.staleBar,
+              background: optStale ? "var(--negative)" : "var(--ink)",
+            }}>
+              <span>
+                {markowitzRunning ? "Optimizando con tus rentabilidades..." :
+                 !markowitz ? "Cartera aún no optimizada." :
+                 "Las rentabilidades cambiaron. Los pesos están desactualizados."}
+              </span>
+              <button
+                onClick={runOptimizer}
+                disabled={markowitzRunning}
+                style={styles.staleBtn}
+              >
+                {markowitzRunning ? "..." : "↻ Re-optimizar Markowitz"}
+              </button>
+            </div>
+          )}
+
+          {Object.entries(grouped).map(([cat, items]) => (
+            <div key={cat} style={styles.catBlock}>
+              <div style={styles.catHeader}>
+                <span>{cat}</span>
+                <span style={styles.catTotal}>
+                  Σ {fmtPct(items.reduce((a, it) => a + weights[it.idx], 0), 1)}
+                </span>
+              </div>
+              {items.map((it) => (
+                <AssetSlider
+                  key={it.id}
+                  asset={it}
+                  weight={weights[it.idx]}
+                  customRet={customReturns[it.idx]}
+                  onRetChange={(v) => {
+                    const next = customReturns.slice();
+                    next[it.idx] = v;
+                    setCustomReturns(next);
+                    setCustomReturnsUserEdited(true);
+                  }}
+                  taxRate={it.cur === "USD" ? taxUSD : taxPEN}
+                  onTickerChange={it.kind === "growth" ? (t) => setGrowthAsset({ ...growthAsset, ticker: t }) :
+                                  it.kind === "value"  ? (t) => setValueAsset({ ...valueAsset, ticker: t }) : undefined}
+                  onRangeChange={it.kind === "growth" ? (r) => setGrowthAsset({ ...growthAsset, ...r }) :
+                                 it.kind === "value"  ? (r) => setValueAsset({ ...valueAsset, ...r }) : undefined}
+                  hasMarketData={!!marketData}
+                />
+              ))}
+            </div>
+          ))}
+
+          <div style={styles.totalRow}>
+            <span>Σ pesos · cartera <strong style={{textTransform: "capitalize"}}>{activePortfolio}</strong></span>
+            <span style={{
+              ...styles.totalValue,
+              color: Math.abs(totalW - 1) < 0.01 ? "var(--positive)" : "var(--negative)",
+            }}>
+              {fmtPct(totalW, 1)}
+            </span>
+          </div>
+
+          {/* ====== 3. COMPOSICION POR CATEGORIA + NOTAS (al final) ====== */}
+          <h3 style={{ ...styles.h3, marginTop: 32 }}>Composición por categoría</h3>
+          <CategoryBars weights={weights} />
+
+          <h3 style={styles.h3}>Notas y supuestos</h3>
+          <ul style={styles.notes}>
+            <li><strong>Cash y plazos fijos tratados como activos sin riesgo (σ = 0):</strong> BIL, IB Savings USD, CD USD, Plazo Fijo PEN y Cuenta Ahorros PEN. No contribuyen a la varianza del portafolio.</li>
+            <li><strong>Activos PEN sin riesgo cambiario:</strong> se asume cobertura USD/PEN activa por parte del inversor. Los retornos PEN se computan en términos locales sin overlay de FX.</li>
+            <li><strong>Markowitz robusto (default):</strong> el optimizador puede dejar un activo en 0% si no aporta. Los <em>maxW</em> sí se respetan (BTC tope 5%, EPU tope 8%, cash tope 10%, etc.) por gestión prudencial.</li>
+            <li><strong>VaR / ES paramétricos asumen normalidad</strong> — sub-estiman cola izquierda en activos con fat tails (BTC, UBER, EPU).</li>
+            <li><strong>Beta "efectivo"</strong> = promedio ponderado de β vs S&P (parte USD) y β vs EPU/BVL (parte PEN). Métrica de lectura, no CAPM puro.</li>
+            <li><strong>Consenso de analistas en MSFT/UBER</strong> viene de yfinance (price targets a 12 meses). Tiende a ser optimista — úsalo como referencia, no como expectativa de largo plazo sostenido.</li>
+          </ul>
+
+          {/* ====== 4. PANEL DE IMPUESTOS (compacto, al final del todo) ====== */}
+          <div style={styles.taxPanelCompact}>
+            <div style={styles.taxPanelCompactLabel}>
+              <span style={styles.taxPanelIcon}>⚙</span>
+              Impuestos sobre rendimientos realizados <span style={styles.taxPanelHint}>(solo cash & plazos fijos)</span>
+            </div>
+            <div style={styles.taxInputsCompact}>
               <div style={styles.taxInputGroup}>
                 <span style={styles.taxInputLabel}>USD</span>
                 <input
@@ -1824,7 +2329,7 @@ export default function Calculadora() {
                     const v = parseFloat(e.target.value) / 100;
                     if (!isNaN(v) && v >= 0 && v <= 0.5) setTaxUSD(v);
                   }}
-                  style={styles.taxInput}
+                  style={styles.taxInputCompact}
                 />
                 <span style={styles.taxInputPct}>%</span>
               </div>
@@ -1837,139 +2342,10 @@ export default function Calculadora() {
                     const v = parseFloat(e.target.value) / 100;
                     if (!isNaN(v) && v >= 0 && v <= 0.5) setTaxPEN(v);
                   }}
-                  style={styles.taxInput}
+                  style={styles.taxInputCompact}
                 />
                 <span style={styles.taxInputPct}>%</span>
               </div>
-              <button
-                onClick={() => setCustomReturns(ASSETS.map(a => a.ret))}
-                style={styles.resetRetBtn}
-                title="Restaurar rentabilidades a los puntos medios de tu tabla"
-              >
-                ↻ Reset rentabilidades
-              </button>
-            </div>
-          </div>
-          <div style={styles.twoCol}>
-            <div>
-              <div style={styles.cardHeader}>
-                <div>
-                  <h2 style={{ ...styles.h2, marginBottom: 4 }}>Sensibilizar Rentabilidades Esperadas</h2>
-                  <div style={styles.compositionHint}>
-                    Los <strong>pesos</strong> vienen del optimizador Markowitz (no editables aquí).
-                    Edita las rentabilidades esperadas (slider en cada activo) y re-corre la optimización para ver los nuevos pesos.
-                  </div>
-                </div>
-                <div style={styles.portfolioSwitcher}>
-                  <div style={styles.portfolioSwitcherLabel}>Cartera Markowitz activa</div>
-                  <div style={styles.portfolioSwitcherButtons}>
-                    {[
-                      ["conservadora", "Conservadora", "var(--positive)"],
-                      ["neutra", "Neutra", "var(--gold)"],
-                      ["agresiva", "Agresiva", "var(--accent)"],
-                    ].map(([k, label, color]) => (
-                      <button
-                        key={k}
-                        onClick={() => setActivePortfolio(k)}
-                        disabled={!markowitz}
-                        style={{
-                          ...styles.portfolioBtn,
-                          ...(activePortfolio === k ? { ...styles.portfolioBtnActive, background: color, borderColor: color } : {}),
-                        }}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {(optStale || !markowitz) && (
-                <div style={{
-                  ...styles.staleBar,
-                  background: optStale ? "var(--negative)" : "var(--ink)",
-                }}>
-                  <span>
-                    {markowitzRunning ? "Optimizando con tus rentabilidades..." :
-                     !markowitz ? "Cartera aún no optimizada." :
-                     "Las rentabilidades cambiaron. Los pesos están desactualizados."}
-                  </span>
-                  <button
-                    onClick={runOptimizer}
-                    disabled={markowitzRunning}
-                    style={styles.staleBtn}
-                  >
-                    {markowitzRunning ? "..." : "↻ Re-optimizar Markowitz"}
-                  </button>
-                </div>
-              )}
-
-              {Object.entries(grouped).map(([cat, items]) => (
-                <div key={cat} style={styles.catBlock}>
-                  <div style={styles.catHeader}>
-                    <span>{cat}</span>
-                    <span style={styles.catTotal}>
-                      Σ {fmtPct(items.reduce((a, it) => a + weights[it.idx], 0), 1)}
-                    </span>
-                  </div>
-                  {items.map((it) => (
-                    <AssetSlider
-                      key={it.id}
-                      asset={it}
-                      weight={weights[it.idx]}
-                      customRet={customReturns[it.idx]}
-                      onRetChange={(v) => {
-                        const next = customReturns.slice();
-                        next[it.idx] = v;
-                        setCustomReturns(next);
-                      }}
-                      taxRate={it.cur === "USD" ? taxUSD : taxPEN}
-                      onTickerChange={it.kind === "growth" ? (t) => setGrowthAsset({ ...growthAsset, ticker: t }) :
-                                      it.kind === "value"  ? (t) => setValueAsset({ ...valueAsset, ticker: t }) : undefined}
-                      onRangeChange={it.kind === "growth" ? (r) => setGrowthAsset({ ...growthAsset, ...r }) :
-                                     it.kind === "value"  ? (r) => setValueAsset({ ...valueAsset, ...r }) : undefined}
-                      hasMarketData={!!marketData}
-                    />
-                  ))}
-                </div>
-              ))}
-
-              <div style={styles.totalRow}>
-                <span>Σ pesos · cartera <strong style={{textTransform: "capitalize"}}>{activePortfolio}</strong></span>
-                <span style={{
-                  ...styles.totalValue,
-                  color: Math.abs(totalW - 1) < 0.01 ? "var(--positive)" : "var(--negative)",
-                }}>
-                  {fmtPct(totalW, 1)}
-                </span>
-              </div>
-            </div>
-
-            <div>
-              <h2 style={styles.h2}>Métricas de Riesgo</h2>
-              <div style={styles.metricsGrid}>
-                <MetricCard label="Retorno Esperado" value={fmtPct(mu)} sub="ponderado por tabla" />
-                <MetricCard label="Volatilidad Anual" value={fmtPct(sigma)} sub="σ de la cartera" />
-                <MetricCard label="Sharpe Ratio" value={sharpe.toFixed(2)} sub={`Rf = ${fmtPct(RISK_FREE, 1)}`} />
-                <MetricCard label="Beta Efectivo" value={beta.toFixed(2)} sub="vs benchmark mixto" />
-                <MetricCard label="VaR 95% (1 año)" value={fmtPct(var95.VaR)} sub="pérdida paramétrica" accent="negative" />
-                <MetricCard label="VaR 99% (1 año)" value={fmtPct(var99.VaR)} sub="pérdida paramétrica" accent="negative" />
-                <MetricCard label="Expected Shortfall 95%" value={fmtPct(var95.ES)} sub="pérdida promedio en cola" accent="negative" />
-                <MetricCard label="Expected Shortfall 99%" value={fmtPct(var99.ES)} sub="pérdida promedio en cola" accent="negative" />
-              </div>
-
-              <h3 style={styles.h3}>Composición por categoría</h3>
-              <CategoryBars weights={weights} />
-
-              <h3 style={styles.h3}>Notas y supuestos</h3>
-              <ul style={styles.notes}>
-                <li><strong>Cash y plazos fijos tratados como activos sin riesgo (σ = 0):</strong> BIL, IB Savings USD, CD USD, Plazo Fijo PEN y Cuenta Ahorros PEN. No contribuyen a la varianza del portafolio. Implica que la Conservadora va a concentrar en ellos hasta sus topes (≈40% del capital).</li>
-                <li><strong>Activos PEN sin riesgo cambiario:</strong> se asume cobertura USD/PEN activa por parte del inversor. Los retornos PEN se computan en términos locales sin overlay de FX.</li>
-                <li><strong>Volatilidades de activos riesgosos son dummies realistas</strong>, se reemplazarán por σ histórica diaria (10 años) en la fase de descarga con yfinance.</li>
-                <li><strong>VaR / ES paramétricos asumen normalidad</strong> — sub-estiman cola izquierda en activos con fat tails (BTC, UBER, EPU). Monte Carlo con t-Student lo corregirá en fase 3.</li>
-                <li><strong>Beta "efectivo"</strong> = promedio ponderado de β vs S&P (parte USD) y β vs EPU/BVL (parte PEN). Métrica de lectura, no CAPM puro.</li>
-                <li><strong>Riesgos NO modelados</strong>: crédito de cajas/bancos en Perú, default corporativo (VTC en estrés sistémico), inflación real vs nominal, riesgo país en bonos soberanos PEN.</li>
-              </ul>
             </div>
           </div>
         </section>
@@ -2347,6 +2723,208 @@ export default function Calculadora() {
             </div>
           </div>
 
+          {/* ============ Barra de Objetivos ============ */}
+          {(() => {
+            const iefIdx   = ASSETS.findIndex(a => a.id === "ief");
+            const pfpenIdx = ASSETS.findIndex(a => a.id === "pfpen");
+            const cspxIdx  = ASSETS.findIndex(a => a.id === "cspx");
+
+            // 5 metas, ordenadas de más fácil a más difícil de batir.
+            // Las metas "ajustables" toman su rentabilidad de customReturns / histRet
+            // (editado en la pestaña Cartera y Riesgo).
+            const goals = [
+              {
+                id: "infl",
+                icon: "📈",
+                name: "Batir la inflación",
+                target: 0.03,
+                hint: "3% anual — proxy estándar de inflación",
+              },
+              {
+                id: "rfusd",
+                icon: "🏦",
+                name: "Batir Risk-Free Bonds EEUU",
+                target: customReturns[iefIdx] ?? ASSETS[iefIdx].ret,
+                hint: "Treasury 10Y (IEF) · editable en Cartera y Riesgo",
+              },
+              {
+                id: "pfpen",
+                icon: "💵",
+                name: "Batir Plazo Fijo PEN",
+                target: customReturns[pfpenIdx] ?? ASSETS[pfpenIdx].ret,
+                hint: "Editable en Cartera y Riesgo",
+              },
+              {
+                id: "sp8",
+                icon: "🎯",
+                name: "Batir S&P 500 (conservador)",
+                target: 0.08,
+                hint: "8% anual — premisa conservadora de largo plazo",
+              },
+              {
+                id: "sp10y",
+                icon: "🚀",
+                name: "Batir S&P 500 (histórico 10y)",
+                target: ASSETS[cspxIdx].histRet,
+                hint: "Promedio histórico cargado en Cartera y Riesgo",
+              },
+            ];
+
+            // Probabilidad lognormal de superar cada meta en el horizonte actual.
+            // P(CAGR > r) = Φ((μ - σ²/2 - ln(1+r)) / (σ/√T))
+            const xMean = mu - 0.5 * sigma * sigma;
+            const xStd  = sigma > 0 ? sigma / Math.sqrt(horizon) : 1e-12;
+            const goalsWithProb = goals.map(g => {
+              const tgt = Math.log(1 + g.target);
+              let prob;
+              if (sigma > 0) {
+                const z = (xMean - tgt) / xStd;
+                prob = 0.5 * (1 + erf(z / Math.sqrt(2)));
+              } else {
+                prob = xMean > tgt ? 1 : (xMean === tgt ? 0.5 : 0);
+              }
+              return { ...g, prob };
+            });
+
+            const probColor = (p) => {
+              if (p >= 0.95) return "var(--positive)";
+              if (p >= 0.80) return "#4a8b5e";
+              if (p >= 0.60) return "var(--gold)";
+              if (p >= 0.40) return "#c97a2e";
+              return "var(--negative)";
+            };
+
+            // Umbrales en el orden visual (izquierda → derecha)
+            const thresholds = [0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99];
+            const highestPassed = (p) => {
+              const hit = thresholds.filter(t => p >= t);
+              return hit.length ? hit[hit.length - 1] : null;
+            };
+
+            return (
+              <>
+                <h3 style={styles.h3}>Barra de objetivos a {horizon} años</h3>
+                <p style={styles.distribIntro}>
+                  Probabilidad lognormal de que tu cartera supere cada benchmark en {horizon} años,
+                  usando tu <strong>μ = {fmtPct(mu, 2)}</strong> y <strong>σ = {fmtPct(sigma, 2)}</strong> actuales.
+                  Las metas ajustables (Risk-Free Bonds EEUU, Plazo Fijo PEN, S&P 500 histórico) toman su
+                  rentabilidad de la pestaña <em>Cartera y Riesgo</em>; cámbialas ahí y la barra se actualiza.
+                </p>
+
+                <div style={styles.goalsLadder}>
+                  {goalsWithProb.map(g => {
+                    const passed = highestPassed(g.prob);
+                    const fillPct = Math.min(100, Math.max(0, g.prob * 100));
+                    const color = probColor(g.prob);
+                    return (
+                      <div key={g.id} style={styles.goalRow}>
+                        {/* Header: nombre + número grande */}
+                        <div style={styles.goalRowHeader}>
+                          <div style={styles.goalTitle}>
+                            <span style={styles.goalIcon}>{g.icon}</span>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={styles.goalName}>{g.name}</div>
+                              <div style={styles.goalHint}>
+                                Meta: <strong>{fmtPct(g.target, 2)}</strong> CAGR
+                                <span style={styles.goalHintSep}>·</span>
+                                {g.hint}
+                              </div>
+                            </div>
+                          </div>
+                          <div style={styles.goalProbBlock}>
+                            <span style={{ ...styles.goalProbNum, color }}>
+                              {(g.prob * 100).toFixed(1)}%
+                            </span>
+                            <span style={styles.goalProbLabel}>de superarla</span>
+                          </div>
+                        </div>
+
+                        {/* Barra horizontal con relleno + ticks */}
+                        <div style={styles.goalBarTrack}>
+                          <div
+                            style={{
+                              ...styles.goalBarFill,
+                              width: `${fillPct}%`,
+                              background: color,
+                            }}
+                          />
+                          {thresholds.map(t => (
+                            <div
+                              key={t}
+                              style={{
+                                ...styles.goalBarTick,
+                                left: `${t * 100}%`,
+                                background: g.prob >= t
+                                  ? "rgba(255,255,255,0.75)"
+                                  : "rgba(0,0,0,0.28)",
+                              }}
+                            />
+                          ))}
+                          {/* Marcador puntiagudo en la punta del relleno */}
+                          {g.prob > 0 && g.prob < 1 && (
+                            <div
+                              style={{
+                                ...styles.goalBarPointer,
+                                left: `${fillPct}%`,
+                                borderTopColor: color,
+                              }}
+                            />
+                          )}
+                        </div>
+
+                        {/* Etiquetas de umbrales debajo */}
+                        <div style={styles.goalThresholdLabels}>
+                          {thresholds.map(t => {
+                            const ok = g.prob >= t;
+                            return (
+                              <div
+                                key={t}
+                                style={{
+                                  ...styles.goalThresholdLabel,
+                                  left: `${t * 100}%`,
+                                  color: ok ? color : "var(--ink-muted)",
+                                  fontWeight: ok ? 700 : 500,
+                                  opacity: ok ? 1 : 0.7,
+                                }}
+                              >
+                                <div style={{ lineHeight: 1 }}>{(t * 100).toFixed(0)}</div>
+                                <div style={{ fontSize: 10, lineHeight: 1, marginTop: 2 }}>
+                                  {ok ? "✓" : "·"}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Status footer */}
+                        <div style={styles.goalStatusRow}>
+                          {passed !== null ? (
+                            <span style={{ ...styles.goalStatusBadge, background: color }}>
+                              ✓ Supera el umbral del {(passed * 100).toFixed(0)}%
+                            </span>
+                          ) : (
+                            <span style={{ ...styles.goalStatusBadge, background: "var(--negative)" }}>
+                              ✗ No alcanza el piso del 50%
+                            </span>
+                          )}
+                          <span style={styles.goalStatusSpread}>
+                            Spread vs cartera: <strong>{fmtPct(mu - g.target, 2)}</strong>
+                            {" "}({mu > g.target ? "favor cartera" : "favor benchmark"})
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <p style={styles.goalsFootnote}>
+                  Modelo lognormal sin rebalanceo dinámico. Las metas en USD se comparan contra el CAGR
+                  de la cartera mixta — para análisis purista por moneda, ajusta el split USD/PEN en la cartera.
+                </p>
+              </>
+            );
+          })()}
+
           <h3 style={styles.h3}>Trayectorias probables · bandas de percentiles</h3>
           <div style={styles.chartWrap}>
             <ResponsiveContainer width="100%" height={380}>
@@ -2457,10 +3035,10 @@ export default function Calculadora() {
                   sub={pledgeResult.avgMCTime !== null ? `Si ocurre, en promedio año ${pledgeResult.avgMCTime.toFixed(1)}` : ""}
                 />
                 <PignCard
-                  title={`Total retirado en ${pledgeHorizon} años`}
+                  title={`Total retirado en ${pledgeHorizon} años (mediana)`}
                   value={fmtUsd(pledgeResult.totalCashWithdrawn)}
                   subValue={`+ ${fmtUsd(pledgeResult.totalInterest)} intereses`}
-                  caption={`Retiraste ${fmtUsd(pledgeResult.W)}/año · el préstamo acumuló ${fmtUsd(pledgeResult.totalInterest)} en intereses`}
+                  caption={`Retiro target inicial: ${fmtUsd(pledgeResult.W)}/año · varía por escenario (×0.80 a ×1.20)`}
                   sub={`Costo financiero: ${fmtPct(pledgeResult.totalInterest / pledgeResult.totalCashWithdrawn, 1)} sobre cada dólar retirado`}
                 />
                 <PignCard
@@ -2480,6 +3058,97 @@ export default function Calculadora() {
                   />
                 )}
               </div>
+
+              {/* ============ Panel: 5 escenarios de retiro endowment ============ */}
+              {pledgeResult.scenarioFreq && (
+                <div style={styles.endowmentPanel}>
+                  <div style={styles.endowmentHeader}>
+                    <h3 style={{ ...styles.h3, margin: 0 }}>Retiro asimétrico · 5 escenarios endowment</h3>
+                    <div style={styles.endowmentSub}>
+                      Cada año al cierre, el retiro target se multiplica según el estado de la cartera:
+                      <code style={{ marginLeft: 6 }}>W_t = {fmtPct(withdrawalPct, 2)} × V_t × mult</code>
+                    </div>
+                  </div>
+                  <div style={styles.endowmentGrid}>
+                    {WITHDRAWAL_SCENARIOS.map((sc) => {
+                      const freq = pledgeResult.scenarioFreq[sc.key] || 0;
+                      return (
+                        <div key={sc.key} style={{
+                          ...styles.scenarioCard,
+                          borderTopColor: sc.color,
+                        }}>
+                          <div style={styles.scenarioName}>{sc.label}</div>
+                          <div style={styles.scenarioMult}>× {sc.mult.toFixed(2)}</div>
+                          <div style={styles.scenarioCondition}>
+                            {sc.key === "crisis"   && "DD vs peak ≤ −25%"}
+                            {sc.key === "caida"    && "DD entre −25% y −10%"}
+                            {sc.key === "normal"   && "DD 0 a −10%, sin nuevo peak"}
+                            {sc.key === "bueno"    && "nuevo peak, YoY +5% a +20%"}
+                            {sc.key === "extraord" && "nuevo peak, YoY > +20%"}
+                          </div>
+                          <div style={styles.scenarioFreqBar}>
+                            <div style={{
+                              ...styles.scenarioFreqFill,
+                              width: `${Math.min(freq * 100 * 3, 100)}%`,
+                              background: sc.color,
+                            }}/>
+                          </div>
+                          <div style={styles.scenarioFreqLabel}>
+                            {(freq * 100).toFixed(1)}% del tiempo
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ============ Tabla: proyección de patrimonio neto multi-horizonte ============ */}
+              {pledgeResult.yearStats && pledgeResult.yearStats.length > 1 && (
+                <div style={styles.projectionPanel}>
+                  <h3 style={{ ...styles.h3, marginTop: 0 }}>Proyección de patrimonio neto · percentiles</h3>
+                  <div style={styles.projectionSub}>
+                    Sobre <strong>{fmtUsd(10000)}</strong> inicial · pignoración LTV {fmtPct(ltv0,0)} ·
+                    retiro endowment {fmtPct(withdrawalPct, 2)} sobre V_t con multiplicador asimétrico.
+                    Para extender más allá de {pledgeHorizon} años, sube el slider de horizonte arriba.
+                  </div>
+                  <div style={styles.projectionTableWrap}>
+                    <table style={styles.projectionTable}>
+                      <thead>
+                        <tr>
+                          <th style={styles.projTh}>Año</th>
+                          <th style={styles.projTh}>V cartera (p50)</th>
+                          <th style={styles.projTh}>Loan acumulado (p50)</th>
+                          <th style={styles.projTh}>Retiro anual (p50)</th>
+                          <th style={styles.projTh}>Patrimonio neto p10</th>
+                          <th style={styles.projTh}>Patrimonio neto p50</th>
+                          <th style={styles.projTh}>Patrimonio neto p90</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[3, 5, 7, 10, 15, 20, 25, 30, 35, 40].filter(y => y <= pledgeHorizon).map(y => {
+                          const stat = pledgeResult.yearStats[y];
+                          if (!stat) return null;
+                          const net_p10 = stat.v_p10 - stat.loan_p90;
+                          const net_p50 = stat.v_p50 - stat.loan_p50;
+                          const net_p90 = stat.v_p90 - stat.loan_p10;
+                          return (
+                            <tr key={y}>
+                              <td style={styles.projTdYear}>{y}</td>
+                              <td style={styles.projTd}>{fmtUsd(stat.v_p50)}</td>
+                              <td style={styles.projTd}>{fmtUsd(stat.loan_p50)}</td>
+                              <td style={styles.projTd}>{fmtUsd(stat.w_p50)}</td>
+                              <td style={{...styles.projTd, color: net_p10 >= 0 ? "var(--ink-muted)" : "var(--negative)"}}>{fmtUsd(net_p10)}</td>
+                              <td style={{...styles.projTd, color: net_p50 >= 10000 ? "var(--positive)" : net_p50 >= 0 ? "var(--ink)" : "var(--negative)", fontWeight: 600}}>{fmtUsd(net_p50)}</td>
+                              <td style={{...styles.projTd, color: net_p90 >= 0 ? "var(--positive)" : "var(--ink-muted)"}}>{fmtUsd(net_p90)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* ============ Benchmark: Plazo Fijo PEN sin riesgo ============ */}
               {pfBenchmark && (
@@ -3100,20 +3769,20 @@ export default function Calculadora() {
         </section>
       )}
 
-      {/* ============== TAB: BACKTESTING ============== */}
+      {/* ============== TAB: BACKTESTING (WALK-FORWARD) ============== */}
       {tab === "backtest" && (
         <section style={styles.section}>
           <div style={styles.markowitzHeader}>
             <div>
-              <h2 style={styles.h2}>Backtesting con Rebalanceo</h2>
+              <h2 style={styles.h2}>Backtesting Walk-Forward · vs S&P 500</h2>
               <p style={styles.intro}>
-                Simulación de la cartera actual sobre <strong>{backtestYears} años</strong> de historia
-                sintética generada con tus rentabilidades esperadas (post-impuestos), las volatilidades
-                históricas dummy y la matriz de correlaciones. Compara contra un benchmark mixto
-                <strong> S&P 500 + EPU/BVLIM</strong> ponderado por tu split USD/PEN.
+                Tres líneas sobre data histórica real ({marketData?.meta?.month_from ?? "—"} → {marketData?.meta?.month_to ?? "—"}):
+                {" "}<strong style={{ color: "var(--accent)" }}>HOY hold</strong> = tus pesos actuales aplicados a la historia,
+                {" "}<strong style={{ color: "var(--gold)" }}>Walk-forward</strong> = en cada rebalanceo re-optimizo Markowitz con σ/corr de los últimos 24 meses (μ = tus supuestos), y
+                {" "}<strong style={{ color: "var(--ink)" }}>S&P 500</strong> = benchmark puro (CSPX). Burn-in 24 meses (no rebal hasta tener ventana completa).
               </p>
             </div>
-            <button onClick={runBacktestSim} style={styles.runBtn} disabled={backtestRunning}>
+            <button onClick={runBacktestSim} style={styles.runBtn} disabled={backtestRunning || !marketData?.monthly_returns}>
               {backtestRunning ? "Simulando..." : backtestResult ? "Re-correr" : "Correr Backtest"}
             </button>
           </div>
@@ -3134,155 +3803,104 @@ export default function Calculadora() {
               </div>
             </div>
             <div style={styles.btControlGroup}>
-              <span style={styles.labelTop}>Período del backtest</span>
+              <span style={styles.labelTop}>Ventana móvil σ/corr</span>
               <div style={styles.confRow}>
-                {[5, 10, 15, 20].map(y => (
-                  <button
-                    key={y}
-                    onClick={() => setBacktestYears(y)}
-                    style={{ ...styles.confBtn, ...(backtestYears === y ? styles.confBtnActive : {}) }}
-                  >
-                    {y} años
-                  </button>
-                ))}
+                <button style={{ ...styles.confBtn, ...styles.confBtnActive }}>24 meses (fijo)</button>
               </div>
             </div>
           </div>
 
-          {!backtestResult && !backtestRunning && (
+          {!marketData?.monthly_returns && (
+            <div style={{ ...styles.placeholder, color: "var(--negative)" }}>
+              ⚠ Se necesita un JSON con <code>monthly_returns</code> y <code>monthly_dates</code> cargado.
+              <br/><span style={{fontSize: 11, opacity: 0.85}}>
+                Re-genera el JSON con la versión nueva del <code>download_data.py</code> (incluye matriz mensual 84×16).
+              </span>
+            </div>
+          )}
+
+          {marketData?.monthly_returns && !backtestResult && !backtestRunning && (
             <div style={styles.placeholder}>
-              Selecciona frecuencia de rebalanceo y período, luego corre el backtest.
+              {marketData.monthly_returns.length} meses disponibles · {marketData.monthly_returns.length - 24} meses efectivos de backtest post burn-in.
               <br/><span style={{fontSize: 11, opacity: 0.7}}>
-                Tip: prueba mismo período/cartera con distintos rebalanceos para ver el impacto.
+                Tip: prueba la misma cartera con 1m / 3m / 6m / 1y y compara CAGR y drawdown.
               </span>
             </div>
           )}
 
           {backtestResult && (
             <>
-              {/* Comparison cards */}
+              {/* Tres cards de métricas: HOY hold / Walk-forward / S&P */}
               <div style={styles.btMetricsGrid}>
-                <BacktestCard
-                  title="Tu Cartera"
-                  subtitle={`Rebalanceo cada ${rebalanceFreq === 1 ? "mes" : rebalanceFreq === 12 ? "año" : `${rebalanceFreq} meses`}`}
-                  data={backtestResult.portfolio}
+                <BacktestLineCard
+                  title="HOY hold"
+                  subtitle="Pesos actuales · sin rebalanceo"
+                  data={backtestResult.metrics.hold}
                   accent="accent"
+                  V0={10000}
                 />
-                <BacktestCard
-                  title="Benchmark"
-                  subtitle={`${(backtestResult.benchmark.wSP*100).toFixed(0)}% S&P + ${(backtestResult.benchmark.wBVL*100).toFixed(0)}% EPU/BVLIM`}
-                  data={backtestResult.benchmark}
+                <BacktestLineCard
+                  title={`Walk-forward · ${rebalanceFreq === 1 ? "1m" : rebalanceFreq === 12 ? "1y" : `${rebalanceFreq}m`}`}
+                  subtitle={`${backtestResult.nReopt} re-optimizaciones · ventana 24m`}
+                  data={backtestResult.metrics.wf}
+                  accent="gold"
+                  V0={10000}
+                />
+                <BacktestLineCard
+                  title="S&P 500 (CSPX)"
+                  subtitle="Benchmark · buy & hold"
+                  data={backtestResult.metrics.sp}
                   accent="ink"
+                  V0={10000}
                 />
-                <div style={styles.btCompCard}>
-                  <div style={styles.optCardLabel}>vs Benchmark</div>
-                  <div style={styles.btCompMetrics}>
-                    <div>
-                      <div style={styles.optMetricLabel}>Alpha anualizado</div>
-                      <div style={{
-                        ...styles.optMetricValue,
-                        color: backtestResult.compare.annualizedAlpha >= 0 ? "var(--positive)" : "var(--negative)"
-                      }}>
-                        {backtestResult.compare.annualizedAlpha >= 0 ? "+" : ""}{fmtPct(backtestResult.compare.annualizedAlpha, 2)}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={styles.optMetricLabel}>Tracking Error</div>
-                      <div style={styles.optMetricValue}>{fmtPct(backtestResult.compare.TE, 2)}</div>
-                    </div>
-                    <div>
-                      <div style={styles.optMetricLabel}>Information Ratio</div>
-                      <div style={{
-                        ...styles.optMetricValue,
-                        color: backtestResult.compare.IR >= 0.5 ? "var(--positive)" : backtestResult.compare.IR >= 0 ? "var(--ink)" : "var(--negative)"
-                      }}>
-                        {backtestResult.compare.IR.toFixed(2)}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={styles.btCompFooter}>
-                    {backtestResult.compare.IR >= 1 ? "Excelente alpha ajustado por riesgo activo" :
-                     backtestResult.compare.IR >= 0.5 ? "Buen alpha ajustado" :
-                     backtestResult.compare.IR >= 0 ? "Alpha positivo pero marginal" :
-                     "Underperformance vs benchmark"}
-                  </div>
-                </div>
               </div>
 
-              {/* Equity curve */}
-              <h3 style={styles.h3}>Curvas de capital · {backtestYears} años</h3>
+              {/* Equity curve — 3 lines */}
+              <h3 style={styles.h3}>Curvas de capital · {backtestResult.dates[0]} → {backtestResult.dates[backtestResult.dates.length-1]}</h3>
               <div style={styles.chartWrap}>
-                <ResponsiveContainer width="100%" height={360}>
+                <ResponsiveContainer width="100%" height={380}>
                   <LineChart
-                    data={backtestResult.portfolio.equity.map((v, i) => ({
-                      month: i,
-                      year: (i / 12).toFixed(2),
-                      portfolio: v,
-                      benchmark: backtestResult.benchmark.equity[i],
+                    data={backtestResult.dates.map((d, i) => ({
+                      date: d,
+                      hold: backtestResult.holdEquity[i],
+                      wf: backtestResult.wfEquity[i],
+                      sp: backtestResult.spEquity[i],
                     }))}
                     margin={{ top: 10, right: 30, left: 20, bottom: 20 }}
                   >
                     <CartesianGrid stroke="rgba(0,0,0,0.06)" />
                     <XAxis
-                      dataKey="month"
-                      tickFormatter={(v) => (v / 12).toFixed(0) + "y"}
+                      dataKey="date"
+                      tickFormatter={(v) => v.slice(0, 7)}
                       stroke="var(--ink-muted)"
                       tick={{ fontSize: 11 }}
-                      label={{ value: "Años", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }}
+                      minTickGap={40}
                     />
                     <YAxis tickFormatter={(v) => fmtUsdK(v)} stroke="var(--ink-muted)" tick={{ fontSize: 11 }} />
                     <Tooltip
-                      formatter={(v) => fmtUsd(v)}
-                      labelFormatter={(v) => `Mes ${v} · año ${(v/12).toFixed(1)}`}
+                      formatter={(v, name) => [fmtUsd(v), name]}
+                      labelFormatter={(d) => `Fecha: ${d}`}
                       contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 12 }}
                     />
-                    <Line type="monotone" dataKey="portfolio" stroke="var(--accent)" strokeWidth={2.5} dot={false} name="Tu Cartera" isAnimationActive={false} />
-                    <Line type="monotone" dataKey="benchmark" stroke="var(--ink)" strokeWidth={1.5} strokeDasharray="5 3" dot={false} name="Benchmark" isAnimationActive={false} />
+                    <Line type="monotone" dataKey="hold" stroke="var(--accent)" strokeWidth={2.2} dot={false} name="HOY hold" isAnimationActive={false} />
+                    <Line type="monotone" dataKey="wf"   stroke="var(--gold)"  strokeWidth={2.2} dot={false} name={`Walk-forward · ${rebalanceFreq}m`} isAnimationActive={false} />
+                    <Line type="monotone" dataKey="sp"   stroke="var(--ink)"   strokeWidth={1.6} strokeDasharray="5 3" dot={false} name="S&P 500" isAnimationActive={false} />
                   </LineChart>
                 </ResponsiveContainer>
                 <div style={styles.legend}>
-                  <span><span style={{...styles.dot, background: "var(--accent)"}}/> Tu Cartera</span>
-                  <span><span style={{...styles.dot, background: "var(--ink)"}}/> Benchmark (S&P + EPU)</span>
+                  <span><span style={{...styles.dot, background: "var(--accent)"}}/> HOY hold (pesos actuales)</span>
+                  <span><span style={{...styles.dot, background: "var(--gold)"}}/> Walk-forward (rebal {rebalanceFreq}m)</span>
+                  <span><span style={{...styles.dot, background: "var(--ink)"}}/> S&P 500</span>
                 </div>
               </div>
 
-              {/* Drawdown chart */}
-              <h3 style={styles.h3}>Drawdown comparativo</h3>
-              <div style={styles.chartWrap}>
-                <ResponsiveContainer width="100%" height={240}>
-                  <AreaChart
-                    data={backtestResult.portfolio.drawdowns.map((d, i) => ({
-                      month: i,
-                      portfolio: d * 100,
-                      benchmark: backtestResult.benchmark.drawdowns[i] * 100,
-                    }))}
-                    margin={{ top: 10, right: 30, left: 20, bottom: 20 }}
-                  >
-                    <CartesianGrid stroke="rgba(0,0,0,0.06)" />
-                    <XAxis
-                      dataKey="month"
-                      tickFormatter={(v) => (v / 12).toFixed(0) + "y"}
-                      stroke="var(--ink-muted)"
-                      tick={{ fontSize: 11 }}
-                    />
-                    <YAxis tickFormatter={(v) => v.toFixed(0) + "%"} stroke="var(--ink-muted)" tick={{ fontSize: 11 }} />
-                    <Tooltip
-                      formatter={(v) => v.toFixed(2) + "%"}
-                      labelFormatter={(v) => `Mes ${v}`}
-                      contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 12 }}
-                    />
-                    <Area type="monotone" dataKey="portfolio" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.25} strokeWidth={2} name="Tu Cartera" isAnimationActive={false} />
-                    <Area type="monotone" dataKey="benchmark" stroke="var(--ink)" fill="var(--ink)" fillOpacity={0.10} strokeWidth={1.5} strokeDasharray="5 3" name="Benchmark" isAnimationActive={false} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-
               <div style={styles.btNote}>
-                <strong>Nota técnica.</strong> Backtest sobre serie sintética generada por Cholesky con tus rentabilidades esperadas
-                netas de impuestos y la matriz de correlaciones actual. Los activos con σ=0 (cash) compoundeen deterministamente.
-                Cuando integremos data real de yfinance, esta misma lógica usará los retornos diarios reales de los últimos 10 años
-                en lugar de la simulación. El número que cambia entre runs es por el componente aleatorio — para resultados estables
-                con datos reales no habrá esa varianza.
+                <strong>Lectura.</strong> Si "Walk-forward" supera a "HOY hold" sistemáticamente, hay valor en rebalancear con σ/corr actualizadas
+                (la cartera de hoy "ignora" la información de los últimos 2 años). Si "HOY hold" gana, la cartera actual capturó algo que el
+                proceso walk-forward pierde — posiblemente lookahead implícito en los supuestos μ que pusiste sabiendo lo que ya pasó.
+                S&P 500 es el "fácil de batir" — si ninguna línea supera al S&P, la diversificación cuesta retorno.
+                <br/><br/>
+                <strong>β vs S&P 500:</strong> HOY hold β={backtestResult.metrics.hold.beta?.toFixed(2)} · Walk-forward β={backtestResult.metrics.wf.beta?.toFixed(2)}. β &lt;1 = menos amplificación de movimientos del mercado.
               </div>
             </>
           )}
@@ -3311,32 +3929,41 @@ function Stat({ label, value, accent }) {
 
 function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerChange, onRangeChange, hasMarketData }) {
   const effRet = asset.isCash ? customRet * (1 - taxRate) : customRet;
-  const retOutOfRange = customRet < asset.retLow || customRet > asset.retHigh;
-  // Cuando hay marketData y la historica es positiva, el slider se centra en
-  // ella. Rango: -100%/+100% sobre histRet para growth/value (mas latitud porque
-  // son acciones individuales mas volatiles), -50%/+100% para el resto.
-  // Sino, mantiene el comportamiento legacy: rango fijo [0, max(retHigh*1.5, histRet*1.3, 6%)].
-  const useHistAnchor = hasMarketData && typeof asset.histRet === "number" && asset.histRet > 0.005;
-  const minMultiplier = asset.editable ? 0.0 : 0.5;
-  const minRet = useHistAnchor ? asset.histRet * minMultiplier : 0;
-  const maxRet = useHistAnchor
-    ? asset.histRet * 2.0
-    : Math.max(asset.retHigh * 1.5, asset.histRet * 1.3, 0.06);
-  const step = 0.001;
-  // Position % of reference markers on the slider track
+
+  // ============ Construir umbrales y separarlos en ARRIBA / ABAJO ============
+  // ARRIBA (datos fundamentales/realizados): Damodaran, Histórica 10y
+  // ABAJO (escenarios adversos y consenso analistas): Mín 1y, Pesim, Neutral, Optim
+  const upperThresholds = [
+    { key: "damodaran", label: "Damod.",   value: asset.damodaran, color: "#3a5a7c", desc: "Cost of equity por industria · Damodaran NYU Stern" },
+    { key: "hist10y",   label: "Hist",     value: asset.histRet,   color: "var(--ink-muted)", desc: "CAGR realizado últimos 10 años (yfinance)" },
+  ].filter(t => typeof t.value === "number" && isFinite(t.value));
+
+  const lowerThresholds = [
+    { key: "min1y",    label: "Mín 1y",   value: asset.hist1yMin,     color: "#7a1b1b", desc: "Peor ventana 12m en histórico diario" },
+    { key: "consLow",  label: "Pesim.",   value: asset.consensusLow,  color: "#c97a2e", desc: "Yahoo analyst target low (o Damodaran fallback)" },
+    { key: "consMean", label: "Neutral",  value: asset.consensusMean, color: "var(--gold)", desc: "Yahoo analyst consensus mean (o Damodaran fallback)" },
+    { key: "consHigh", label: "Optim.",   value: asset.consensusHigh, color: "#5a9d6e", desc: "Yahoo analyst target high (o Damodaran fallback)" },
+  ].filter(t => typeof t.value === "number" && isFinite(t.value));
+
+  const allThresholds = [...upperThresholds, ...lowerThresholds];
+
+  // Rango del slider: incluir todos los thresholds + customRet, padding 5%
+  const allValues = [...allThresholds.map(t => t.value), customRet];
+  const minVal = Math.min(...allValues);
+  const maxVal = Math.max(...allValues);
+  const span = Math.max(maxVal - minVal, 0.02);
+  const minRet = minVal - span * 0.05;
+  const maxRet = maxVal + span * 0.05;
+  const step = 0.0005;
   const pctOf = (v) => Math.max(0, Math.min(100, ((v - minRet) / (maxRet - minRet)) * 100));
-  const pctLow = pctOf(asset.retLow);
-  const pctHigh = pctOf(asset.retHigh);
-  const pctHist = pctOf(asset.histRet);
-  // Mostrar Hist 10y siempre que exista y sea > 0; el placeholder "—" sólo
-  // aparece para growth/value sin marketData cargado (no tenemos histórica del ticker custom).
-  const showHist = (typeof asset.histRet === "number" && asset.histRet > 0) && (!asset.editable || hasMarketData);
+
   return (
     <div style={{
       ...styles.assetRow,
       ...(asset.editable ? styles.assetRowEditable : {}),
     }}>
       <div style={styles.assetInfo}>
+        {/* Top line: nombre + currency + sigma + valor μ actual */}
         <div style={styles.assetTopLine}>
           {asset.editable ? (
             <>
@@ -3361,89 +3988,135 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
               <span style={styles.assetSigmaTop}>σ {fmtPct(asset.vol, 1)}</span>
             </>
           )}
-        </div>
-        <div style={styles.assetRefRow}>
-          <span style={styles.refItem}>
-            Hist 10y: <strong>{showHist ? fmtPct(asset.histRet, 1) : "—"}</strong>
-            {!showHist && asset.editable && <span style={styles.refPlaceholder}> (se calcula con datos reales)</span>}
+          <span style={styles.assetSpacer} />
+          <span style={styles.assetCurrentMu}>
+            μ <strong style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 14,
+              color: "var(--accent)",
+            }}>{fmtPct(customRet, 2)}</strong>
           </span>
-          <span style={styles.refSep}>|</span>
-          {asset.editable ? (
-            <span style={styles.refItem}>
-              Rango esperado:{" "}
-              <input
-                type="number"
-                step="0.5"
-                value={(asset.retLow * 100).toFixed(1)}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value) / 100;
-                  if (!isNaN(v)) onRangeChange({ retLow: v, retHigh: asset.retHigh });
-                }}
-                style={styles.rangeMiniInput}
-              />
-              <span style={styles.rangeMiniPct}>%</span>
-              <span style={{ margin: "0 4px" }}>–</span>
-              <input
-                type="number"
-                step="0.5"
-                value={(asset.retHigh * 100).toFixed(1)}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value) / 100;
-                  if (!isNaN(v)) onRangeChange({ retLow: asset.retLow, retHigh: v });
-                }}
-                style={styles.rangeMiniInput}
-              />
-              <span style={styles.rangeMiniPct}>%</span>
-            </span>
-          ) : (
-            <span style={styles.refItem}>
-              Damodaran: <strong>{fmtPct(asset.retLow, 1)} – {fmtPct(asset.retHigh, 1)}</strong>
-            </span>
-          )}
-          {asset.isCash && (
-            <>
-              <span style={styles.refSep}>|</span>
-              <span style={styles.taxIndicator}>
-                Neto post-tax {fmtPct(taxRate, 0)}: <strong>{fmtPct(effRet, 2)}</strong>
-              </span>
-            </>
-          )}
         </div>
 
-        {/* Return slider with reference markers */}
-        <div style={styles.retSliderRow}>
-          <span style={styles.retSliderLabel}>μ esperado</span>
-          <div style={styles.retSliderWrap}>
-            {/* Reference markers behind the slider */}
-            <div style={styles.retSliderTrack}>
-              {showHist && (
-                <div style={{ ...styles.refMarkerHist, left: `${pctHist}%` }} title={`Hist 10y: ${fmtPct(asset.histRet, 2)}`} />
-              )}
-              <div style={{ ...styles.refMarkerLow, left: `${pctLow}%` }} title={`Range low: ${fmtPct(asset.retLow, 2)}`} />
-              <div style={{ ...styles.refMarkerHigh, left: `${pctHigh}%` }} title={`Range high: ${fmtPct(asset.retHigh, 2)}`} />
-              <div style={{
-                ...styles.damodaranBand,
-                left: `${pctLow}%`,
-                width: `${Math.max(pctHigh - pctLow, 0.5)}%`,
-              }} />
-            </div>
-            <input
-              type="range"
-              min={minRet}
-              max={maxRet}
-              step={step}
-              value={customRet}
-              onChange={(e) => onRetChange(parseFloat(e.target.value))}
-              style={styles.retSliderInput}
-            />
+        {/* Info row (consenso source, tax, range si editable) */}
+        {(asset.consensusSource || asset.isCash || asset.editable) && (
+          <div style={styles.assetSourceRow}>
+            {asset.consensusSource && (
+              <>
+                <span style={styles.sourceLabel}>Consenso:</span>
+                <code style={styles.sourceCode}>{asset.consensusSource}</code>
+              </>
+            )}
+            {asset.isCash && (
+              <>
+                {asset.consensusSource && <span style={styles.refSep}>·</span>}
+                <span style={styles.taxIndicator}>
+                  Neto post-tax {fmtPct(taxRate, 0)}: <strong>{fmtPct(effRet, 2)}</strong>
+                </span>
+              </>
+            )}
+            {asset.editable && (
+              <>
+                {(asset.consensusSource || asset.isCash) && <span style={styles.refSep}>·</span>}
+                <span style={styles.refItem}>
+                  Rango Damodaran:{" "}
+                  <input
+                    type="number" step="0.5"
+                    value={(asset.retLow * 100).toFixed(1)}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value) / 100;
+                      if (!isNaN(v)) onRangeChange({ retLow: v, retHigh: asset.retHigh });
+                    }}
+                    style={styles.rangeMiniInput}
+                  /><span style={styles.rangeMiniPct}>%</span>
+                  <span style={{ margin: "0 4px" }}>–</span>
+                  <input
+                    type="number" step="0.5"
+                    value={(asset.retHigh * 100).toFixed(1)}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value) / 100;
+                      if (!isNaN(v)) onRangeChange({ retLow: asset.retLow, retHigh: v });
+                    }}
+                    style={styles.rangeMiniInput}
+                  /><span style={styles.rangeMiniPct}>%</span>
+                </span>
+              </>
+            )}
           </div>
-          <span style={{
-            ...styles.retSliderValue,
-            color: retOutOfRange ? "var(--accent)" : "var(--ink)",
-          }}>
-            {fmtPct(customRet, 2)}
-          </span>
-        </div>
+        )}
+
+        {/* ============ Barra integrada con labels arriba/abajo ============ */}
+        {allThresholds.length > 0 && (
+          <div style={styles.thresholdBarWrap}>
+            {/* === Labels ARRIBA: Damodaran + Histórica === */}
+            <div style={styles.thresholdLabelsTop}>
+              {upperThresholds.map((t) => (
+                <button
+                  key={t.key + "-top"}
+                  onClick={() => onRetChange(t.value)}
+                  style={{
+                    ...styles.thresholdBtnTop,
+                    left: `${pctOf(t.value)}%`,
+                    color: t.color,
+                  }}
+                  title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
+                >
+                  <div style={styles.thresholdBtnLabel}>{t.label}</div>
+                  <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* === Track con tick lines + slider integrado === */}
+            <div style={styles.thresholdTrackInteractive}>
+              {/* Fondo gris de la barra */}
+              <div style={styles.thresholdTrackBg} />
+              {/* Líneas verticales en cada umbral (decorativas) */}
+              {allThresholds.map(t => (
+                <div
+                  key={t.key + "-line"}
+                  style={{
+                    ...styles.thresholdTickLine,
+                    left: `${pctOf(t.value)}%`,
+                    background: t.color,
+                  }}
+                  title={`${t.label}: ${fmtPct(t.value, 2)}`}
+                />
+              ))}
+              {/* Slider — input range con track transparente; el thumb es el "pulgar" rojo */}
+              <input
+                type="range"
+                min={minRet}
+                max={maxRet}
+                step={step}
+                value={customRet}
+                onChange={(e) => onRetChange(parseFloat(e.target.value))}
+                style={styles.thresholdRangeInput}
+                className="threshold-slider"
+                aria-label={`Rentabilidad esperada de ${asset.name}`}
+              />
+            </div>
+
+            {/* === Labels ABAJO: Mín 1y + 3 escenarios consenso === */}
+            <div style={styles.thresholdLabelsBottom}>
+              {lowerThresholds.map((t) => (
+                <button
+                  key={t.key + "-bot"}
+                  onClick={() => onRetChange(t.value)}
+                  style={{
+                    ...styles.thresholdBtnBottom,
+                    left: `${pctOf(t.value)}%`,
+                    color: t.color,
+                  }}
+                  title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
+                >
+                  <div style={styles.thresholdBtnLabel}>{t.label}</div>
+                  <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Weight display (read-only, from Markowitz) */}
@@ -3470,6 +4143,18 @@ function MetricCard({ label, value, sub, accent }) {
       <div style={styles.metricLabel}>{label}</div>
       <div style={{ ...styles.metricValue, color }}>{value}</div>
       {sub && <div style={styles.metricSub}>{sub}</div>}
+    </div>
+  );
+}
+
+// Versión compacta para el banner horizontal de la pestaña Cartera
+function MetricCardCompact({ label, value, sub, accent }) {
+  const color = accent === "positive" ? "var(--positive)" : accent === "negative" ? "var(--negative)" : "var(--ink)";
+  return (
+    <div style={styles.metricCompact}>
+      <div style={styles.metricCompactLabel}>{label}</div>
+      <div style={{ ...styles.metricCompactValue, color }}>{value}</div>
+      {sub && <div style={styles.metricCompactSub}>{sub}</div>}
     </div>
   );
 }
@@ -3878,6 +4563,54 @@ function BacktestCard({ title, subtitle, data, accent }) {
   );
 }
 
+// Versión para el walk-forward backtest: 3 líneas (hold/wf/sp)
+function BacktestLineCard({ title, subtitle, data, accent, V0 = 10000 }) {
+  const accentColor =
+    accent === "accent" ? "var(--accent)" :
+    accent === "gold"   ? "var(--gold)" :
+                          "var(--ink)";
+  return (
+    <div style={{ ...styles.optCard, borderColor: accentColor }}>
+      <div>
+        <div style={{ ...styles.optCardLabel, color: accentColor }}>{title}</div>
+        <div style={styles.optCardDesc}>{subtitle}</div>
+      </div>
+      <div style={styles.optMetrics}>
+        <div>
+          <div style={styles.optMetricLabel}>Valor final</div>
+          <div style={styles.optMetricValue}>{fmtUsd(data.finalV)}</div>
+        </div>
+        <div>
+          <div style={styles.optMetricLabel}>CAGR</div>
+          <div style={{...styles.optMetricValue, color: data.cagr >= 0 ? "var(--positive)" : "var(--negative)"}}>
+            {fmtPct(data.cagr, 2)}
+          </div>
+        </div>
+        <div>
+          <div style={styles.optMetricLabel}>Sharpe</div>
+          <div style={styles.optMetricValue}>{data.sharpe.toFixed(2)}</div>
+        </div>
+      </div>
+      <div style={styles.optMetrics}>
+        <div>
+          <div style={styles.optMetricLabel}>σ realizada</div>
+          <div style={{...styles.optMetricValue, fontSize: 18}}>{fmtPct(data.vol, 1)}</div>
+        </div>
+        <div>
+          <div style={styles.optMetricLabel}>Max DD</div>
+          <div style={{...styles.optMetricValue, fontSize: 18, color: "var(--negative)"}}>{fmtPct(data.maxDD, 1)}</div>
+        </div>
+        <div>
+          <div style={styles.optMetricLabel}>β vs S&P</div>
+          <div style={{...styles.optMetricValue, fontSize: 18}}>
+            {isFinite(data.beta) ? data.beta.toFixed(2) : "—"}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ComparisonTable({ portfolios }) {
   // Get all assets that appear with weight > 0 in any portfolio
   const allIdx = new Set();
@@ -3989,6 +4722,51 @@ const globalCSS = `
     cursor: pointer;
     border: 2px solid var(--surface);
     box-shadow: 0 0 0 1px var(--accent);
+  }
+  /* === Slider integrado del AssetSlider — thumb prominente sobre la barra === */
+  input.threshold-slider {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    height: 22px;
+  }
+  input.threshold-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 26px;
+    border-radius: 3px;
+    background: var(--accent);
+    cursor: grab;
+    border: 2px solid var(--surface);
+    box-shadow: 0 0 0 1.5px var(--accent), 0 1px 3px rgba(0,0,0,0.25);
+    margin-top: -2px;
+  }
+  input.threshold-slider::-webkit-slider-thumb:active {
+    cursor: grabbing;
+    box-shadow: 0 0 0 1.5px var(--accent), 0 2px 6px rgba(0,0,0,0.4);
+  }
+  input.threshold-slider::-moz-range-thumb {
+    width: 16px;
+    height: 26px;
+    border-radius: 3px;
+    background: var(--accent);
+    cursor: grab;
+    border: 2px solid var(--surface);
+    box-shadow: 0 0 0 1.5px var(--accent), 0 1px 3px rgba(0,0,0,0.25);
+  }
+  input.threshold-slider::-moz-range-thumb:active {
+    cursor: grabbing;
+  }
+  input.threshold-slider::-webkit-slider-runnable-track {
+    background: transparent;
+    height: 22px;
+    border: none;
+  }
+  input.threshold-slider::-moz-range-track {
+    background: transparent;
+    height: 22px;
+    border: none;
   }
 `;
 
@@ -5478,5 +6256,569 @@ const styles = {
     textTransform: "uppercase",
     color: "var(--ink-muted)",
     fontWeight: 600,
+  },
+
+  // ============ Barra de Objetivos (Horizonte tab) ============
+  goalsLadder: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 14,
+    marginTop: 14,
+    marginBottom: 12,
+  },
+  goalRow: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderLeft: "3px solid var(--gold)",
+    borderRadius: 2,
+    padding: "14px 20px 16px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  goalRowHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+    flexWrap: "wrap",
+  },
+  goalTitle: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 12,
+    flex: "1 1 240px",
+    minWidth: 0,
+  },
+  goalIcon: {
+    fontSize: 22,
+    lineHeight: 1.1,
+    flexShrink: 0,
+    marginTop: 1,
+  },
+  goalName: {
+    fontSize: 15,
+    fontWeight: 600,
+    color: "var(--ink)",
+    lineHeight: 1.25,
+    marginBottom: 4,
+  },
+  goalHint: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
+    lineHeight: 1.45,
+    fontVariantNumeric: "tabular-nums",
+  },
+  goalHintSep: {
+    margin: "0 6px",
+    opacity: 0.5,
+  },
+  goalProbBlock: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    textAlign: "right",
+    flexShrink: 0,
+  },
+  goalProbNum: {
+    fontFamily: "'Fraunces', 'DM Sans', serif",
+    fontSize: 28,
+    fontWeight: 600,
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1,
+    letterSpacing: "-0.01em",
+  },
+  goalProbLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    marginTop: 6,
+  },
+  goalBarTrack: {
+    position: "relative",
+    height: 18,
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    overflow: "hidden",
+    marginTop: 4,
+  },
+  goalBarFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    transition: "width 280ms ease, background 280ms ease",
+  },
+  goalBarTick: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 1.5,
+    pointerEvents: "none",
+  },
+  goalBarPointer: {
+    position: "absolute",
+    top: -1,
+    width: 0,
+    height: 0,
+    borderLeft: "5px solid transparent",
+    borderRight: "5px solid transparent",
+    borderTop: "6px solid var(--ink)",
+    transform: "translateX(-50%)",
+    transition: "left 280ms ease, border-top-color 280ms ease",
+    pointerEvents: "none",
+  },
+  goalThresholdLabels: {
+    position: "relative",
+    height: 26,
+    marginTop: 2,
+    overflow: "visible",
+  },
+  goalThresholdLabel: {
+    position: "absolute",
+    transform: "translateX(-50%)",
+    top: 0,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.02em",
+    textAlign: "center",
+    width: 22,
+    fontVariantNumeric: "tabular-nums",
+  },
+  goalStatusRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    marginTop: 2,
+    paddingTop: 8,
+    borderTop: "1px dashed var(--border)",
+  },
+  goalStatusBadge: {
+    display: "inline-block",
+    padding: "3px 10px",
+    borderRadius: 2,
+    color: "#fff",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    letterSpacing: "0.06em",
+    fontWeight: 600,
+    textTransform: "uppercase",
+  },
+  goalStatusSpread: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
+    fontVariantNumeric: "tabular-nums",
+  },
+  goalsFootnote: {
+    fontSize: 11,
+    color: "var(--ink-muted)",
+    fontStyle: "italic",
+    marginTop: 6,
+    marginBottom: 18,
+    lineHeight: 1.5,
+  },
+
+  // ============ Caja horizontal de métricas (tab Cartera) ============
+  metricsHorizontalBox: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderLeft: "3px solid var(--accent)",
+    borderRadius: 2,
+    padding: "16px 20px 18px",
+    marginBottom: 24,
+  },
+  metricsHorizontalHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    gap: 18,
+    marginBottom: 14,
+    flexWrap: "wrap",
+  },
+  metricsHorizontalTitle: {
+    fontSize: 15,
+    fontWeight: 600,
+    color: "var(--ink)",
+    margin: 0,
+    textTransform: "capitalize",
+  },
+  metricsHorizontalSub: {
+    fontSize: 11.5,
+    color: "var(--ink-muted)",
+    fontFamily: "'JetBrains Mono', monospace",
+    flex: "1 1 320px",
+    minWidth: 0,
+    textAlign: "right",
+  },
+  metricsHorizontalGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))",
+    gap: 14,
+  },
+  metricCompact: {
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    minWidth: 0,
+  },
+  metricCompactLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  metricCompactValue: {
+    fontFamily: "'Fraunces', 'DM Sans', serif",
+    fontSize: 19,
+    fontWeight: 600,
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1.1,
+    letterSpacing: "-0.01em",
+  },
+  metricCompactSub: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9,
+    color: "var(--ink-muted)",
+    letterSpacing: "0.02em",
+  },
+
+  // ============ Control bar (toggle robust + reset) ============
+  cartControlBar: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 18,
+    flexWrap: "wrap",
+    padding: "10px 14px",
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    marginBottom: 14,
+  },
+  robustToggleLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 12.5,
+    cursor: "pointer",
+    flex: "1 1 320px",
+    flexWrap: "wrap",
+  },
+  robustToggleHint: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
+    marginLeft: 8,
+    lineHeight: 1.45,
+  },
+
+  // ============ Asset slider: nuevos elementos ============
+  assetSpacer: { flex: 1 },
+  assetCurrentMu: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--ink-muted)",
+    whiteSpace: "nowrap",
+  },
+  assetSourceRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    fontSize: 11,
+    color: "var(--ink-muted)",
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  sourceLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+  },
+  sourceCode: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    background: "var(--surface-2)",
+    padding: "1px 6px",
+    borderRadius: 2,
+    border: "1px solid var(--border)",
+    color: "var(--ink)",
+  },
+
+  // ============ Threshold bar (estructura split: labels arriba/abajo + slider integrado) ============
+  thresholdBarWrap: {
+    position: "relative",
+    marginTop: 10,
+    marginBottom: 6,
+    paddingLeft: 12,
+    paddingRight: 12,
+  },
+  // Fila de labels ARRIBA (Damodaran + Histórica)
+  thresholdLabelsTop: {
+    position: "relative",
+    height: 28,
+    marginBottom: 4,
+  },
+  thresholdBtnTop: {
+    position: "absolute",
+    bottom: 0,
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    fontFamily: "'JetBrains Mono', monospace",
+    minWidth: 0,
+    whiteSpace: "nowrap",
+    transform: "translateX(-50%)",
+  },
+  // Track interactivo: contenedor que aloja fondo + tick lines + slider
+  thresholdTrackInteractive: {
+    position: "relative",
+    height: 22,
+  },
+  // Fondo gris visible de la barra
+  thresholdTrackBg: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 22,
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    zIndex: 0,
+  },
+  // Tick line vertical en cada umbral
+  thresholdTickLine: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 2,
+    transform: "translateX(-50%)",
+    pointerEvents: "none",
+    zIndex: 1,
+  },
+  // Input range con track transparente, thumb prominente sobre el fondo+ticks
+  thresholdRangeInput: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: 22,
+    appearance: "none",
+    WebkitAppearance: "none",
+    background: "transparent",
+    margin: 0,
+    padding: 0,
+    cursor: "pointer",
+    zIndex: 2,
+  },
+  // Fila de labels ABAJO (Mín 1y + 3 escenarios consenso)
+  thresholdLabelsBottom: {
+    position: "relative",
+    height: 28,
+    marginTop: 4,
+  },
+  thresholdBtnBottom: {
+    position: "absolute",
+    top: 0,
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    fontFamily: "'JetBrains Mono', monospace",
+    minWidth: 0,
+    whiteSpace: "nowrap",
+    transform: "translateX(-50%)",
+  },
+  thresholdBtnLabel: {
+    fontSize: 9,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    fontWeight: 700,
+    lineHeight: 1,
+  },
+  thresholdBtnValue: {
+    fontSize: 10,
+    fontWeight: 500,
+    marginTop: 2,
+    fontVariantNumeric: "tabular-nums",
+    color: "var(--ink-muted)",
+    lineHeight: 1,
+  },
+
+  // ============ Panel de impuestos compacto (al final del tab) ============
+  taxPanelCompact: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 14,
+    padding: "10px 14px",
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    marginTop: 24,
+    flexWrap: "wrap",
+  },
+  taxPanelCompactLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 11.5,
+    color: "var(--ink)",
+    fontWeight: 500,
+  },
+  taxInputsCompact: {
+    display: "flex",
+    gap: 14,
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  // ============ Panel de escenarios endowment ============
+  endowmentPanel: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderLeft: "3px solid var(--gold)",
+    borderRadius: 2,
+    padding: "16px 18px",
+    marginTop: 24,
+    marginBottom: 24,
+  },
+  endowmentHeader: {
+    marginBottom: 14,
+  },
+  endowmentSub: {
+    fontSize: 11.5,
+    color: "var(--ink-muted)",
+    marginTop: 4,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  endowmentGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+    gap: 12,
+  },
+  scenarioCard: {
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderTop: "3px solid var(--ink)",
+    borderRadius: 2,
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  scenarioName: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--ink)",
+  },
+  scenarioMult: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 22,
+    fontWeight: 600,
+    color: "var(--ink)",
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1.1,
+  },
+  scenarioCondition: {
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
+    fontFamily: "'JetBrains Mono', monospace",
+    lineHeight: 1.4,
+    minHeight: 28,
+  },
+  scenarioFreqBar: {
+    height: 4,
+    background: "var(--border)",
+    borderRadius: 2,
+    overflow: "hidden",
+    marginTop: 4,
+  },
+  scenarioFreqFill: {
+    height: "100%",
+    transition: "width 0.3s ease",
+  },
+  scenarioFreqLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--ink-muted)",
+    letterSpacing: "0.02em",
+  },
+
+  // ============ Tabla proyección patrimonio ============
+  projectionPanel: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderLeft: "3px solid var(--positive)",
+    borderRadius: 2,
+    padding: "16px 18px",
+    marginTop: 6,
+    marginBottom: 24,
+  },
+  projectionSub: {
+    fontSize: 11.5,
+    color: "var(--ink-muted)",
+    marginBottom: 12,
+    lineHeight: 1.5,
+  },
+  projectionTableWrap: {
+    overflowX: "auto",
+  },
+  projectionTable: {
+    width: "100%",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    borderCollapse: "collapse",
+  },
+  projTh: {
+    textAlign: "right",
+    padding: "8px 10px",
+    fontSize: 10.5,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    borderBottom: "1px solid var(--border)",
+  },
+  projTdYear: {
+    textAlign: "left",
+    padding: "8px 10px",
+    fontWeight: 600,
+    color: "var(--ink)",
+    fontVariantNumeric: "tabular-nums",
+    borderBottom: "1px solid var(--surface-2)",
+  },
+  projTd: {
+    textAlign: "right",
+    padding: "8px 10px",
+    fontVariantNumeric: "tabular-nums",
+    color: "var(--ink)",
+    borderBottom: "1px solid var(--surface-2)",
   },
 };

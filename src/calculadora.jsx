@@ -1039,7 +1039,28 @@ function runMarkowitz(effRet, nSamples = 15000, assets = ASSETS, corr = C) {
     const { mu, sigma } = portfolioMoments(w, effRet, assets, corr);
     return sigma > 0 ? (mu - RISK_FREE) / sigma : 0;
   }, true);
-  const agresiva = refine(samples[maxRetIdx], w => portfolioMoments(w, effRet, assets, corr).mu, true);
+
+  // AGRESIVA: target μ = Neutra.mu × 1.30 (30% más retorno que la Neutra),
+  // minimizando varianza para ese target. Si el target es inalcanzable
+  // (todas las samples están debajo), cae a la cartera de máximo retorno.
+  const targetMu = neutra.mu * 1.30;
+  const candidatesAtTarget = samples.filter(s => s.mu >= targetMu);
+  let agresiva;
+  if (candidatesAtTarget.length > 0) {
+    // Tomar el sample con menor σ entre los que cumplen el target
+    const startSample = candidatesAtTarget.reduce((best, s) => s.sigma < best.sigma ? s : best, candidatesAtTarget[0]);
+    // Refinar: minimizar σ manteniendo μ >= target (penaliza con Infinity si baja del target)
+    agresiva = refine(startSample, w => {
+      const { mu, sigma } = portfolioMoments(w, effRet, assets, corr);
+      if (mu < targetMu) return Infinity;
+      return sigma;
+    }, false);
+  } else {
+    // Target inalcanzable → caer al máximo retorno (con flag para UI)
+    agresiva = refine(samples[maxRetIdx], w => portfolioMoments(w, effRet, assets, corr).mu, true);
+    agresiva.targetUnreachable = true;
+  }
+  agresiva.targetMu = targetMu;
   // Subsample for chart (3,000 points is plenty)
   const chartSamples = [];
   const stride = Math.max(1, Math.floor(samples.length / 3000));
@@ -2235,10 +2256,10 @@ export default function Calculadora() {
             </div>
           </div>
 
-          {/* Toggles de restricciones + Reset rentabilidades */}
+          {/* Toggles de restricciones (2 cuadritos compactos) + Reset rentabilidades */}
           <div style={styles.cartControlBar}>
-            <div style={styles.cartToggles}>
-              <label style={styles.robustToggleLabel}>
+            <label style={styles.toggleBox}>
+              <div style={styles.toggleBoxHeader}>
                 <input
                   type="checkbox"
                   checked={!enforceMinFloors}
@@ -2246,12 +2267,13 @@ export default function Calculadora() {
                   style={{ marginRight: 8 }}
                 />
                 <strong>Markowitz robusto</strong>
-                <span style={styles.robustToggleHint}>
-                  Permite que un activo quede en 0% (sin pisos).
-                  Apagado: pisos mínimos forzados por activo.
-                </span>
-              </label>
-              <label style={styles.robustToggleLabel}>
+              </div>
+              <div style={styles.toggleBoxHint}>
+                Permite que un activo quede en 0% (sin pisos forzados).
+              </div>
+            </label>
+            <label style={styles.toggleBox}>
+              <div style={styles.toggleBoxHeader}>
                 <input
                   type="checkbox"
                   checked={enforceMaxCaps}
@@ -2259,12 +2281,11 @@ export default function Calculadora() {
                   style={{ marginRight: 8 }}
                 />
                 <strong>Topes por volatilidad</strong>
-                <span style={styles.robustToggleHint}>
-                  Limita σ &gt; 50% al 5% · σ entre 25-50% al 10%.
-                  Apagado: Markowitz puro (puede concentrar 100% en un activo).
-                </span>
-              </label>
-            </div>
+              </div>
+              <div style={styles.toggleBoxHint}>
+                σ &gt; 50% → 5% · σ 25-50% → 10%.
+              </div>
+            </label>
             <button
               onClick={resetReturnsToAutoDefault}
               style={styles.resetRetBtn}
@@ -2396,9 +2417,10 @@ export default function Calculadora() {
             <div>
               <h2 style={styles.h2}>Frontera Eficiente de Markowitz</h2>
               <p style={styles.intro}>
-                Genero <strong>15,000 carteras aleatorias</strong> respetando tus límites min/max por activo,
-                las posiciono en el plano (σ, μ), y refino localmente los tres puntos clave:
-                <strong> Mínima Varianza</strong>, <strong>Max Sharpe</strong> (la tangencial) y <strong>Máxima Rentabilidad</strong>.
+                Genero <strong>15,000 carteras aleatorias</strong> respetando los toggles de pisos/topes,
+                las posiciono en el plano (σ, μ), y refino localmente tres puntos clave:
+                <strong> Mínima Varianza</strong> (Conservadora), <strong>Max Sharpe</strong> (Neutra, tangencial) y
+                <strong> target μ = Neutra × 1.30</strong> con mínima varianza (Agresiva).
                 Click en cualquiera para cargarla en la pestaña I y experimentar.
               </p>
             </div>
@@ -2435,7 +2457,9 @@ export default function Calculadora() {
                 />
                 <OptimalPortfolioCard
                   label="Agresiva"
-                  desc="Máxima Rentabilidad"
+                  desc={markowitz.agresiva.targetUnreachable
+                    ? "Máxima Rentabilidad (target +30% inalcanzable)"
+                    : "Target μ = Neutra × 1.30"}
                   portfolio={markowitz.agresiva}
                   accent="accent"
                   onLoad={() => { setActivePortfolio("agresiva"); setTab("cartera"); }}
@@ -2499,7 +2523,7 @@ export default function Calculadora() {
                       shape={(props) => <OptimumMarker {...props} color="var(--gold)" label="NEUTRA" />}
                     />
                     <Scatter
-                      name="Agresiva (Max Ret)"
+                      name="Agresiva (target Neutra × 1.30)"
                       data={[{ x: markowitz.agresiva.sigma, y: markowitz.agresiva.mu }]}
                       fill="var(--accent)"
                       shape={(props) => <OptimumMarker {...props} color="var(--accent)" label="AGRESIVA" />}
@@ -6692,22 +6716,34 @@ const styles = {
   // ============ Control bar (toggle robust + reset) ============
   cartControlBar: {
     display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 18,
+    alignItems: "stretch",
+    gap: 10,
     flexWrap: "wrap",
-    padding: "12px 14px",
-    background: "var(--surface-2)",
-    border: "1px solid var(--border)",
-    borderRadius: 2,
     marginBottom: 14,
   },
-  cartToggles: {
+  toggleBox: {
+    flex: "1 1 280px",
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
-    gap: 8,
-    flex: "1 1 420px",
-    minWidth: 0,
+    gap: 3,
+    padding: "8px 12px",
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    cursor: "pointer",
+  },
+  toggleBoxHeader: {
+    display: "flex",
+    alignItems: "center",
+    fontSize: 13,
+  },
+  toggleBoxHint: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--ink-muted)",
+    lineHeight: 1.4,
+    marginLeft: 22,
   },
   robustToggleLabel: {
     display: "flex",

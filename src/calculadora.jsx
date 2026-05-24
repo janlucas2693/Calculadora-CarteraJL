@@ -16,8 +16,8 @@ const ASSETS = [
   { id: "cspx",  name: "ETF S&P 500 (CSPX/VUAA)",     shortName: "S&P 500",        desc: "500 mayores empresas USA · acc UCITS Irlanda", cur: "USD", cat: "Renta Variable USD",   ret: 0.090, vol: 0.1803, minW: 0.10, maxW: 0.25, defW: 0.15, retLow: 0.08, retHigh: 0.10, histRet: 0.1662, isCash: false },
   { id: "cndx",  name: "ETF Nasdaq 100 (CNDX)",       shortName: "Nasdaq 100",     desc: "100 mayores tech-heavy USA · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.110, vol: 0.2207, minW: 0.05, maxW: 0.15, defW: 0.08, retLow: 0.10, retHigh: 0.12, histRet: 0.2258, isCash: false },
   { id: "iwda",  name: "MSCI World ex-USA Acc (EXUS.L)", shortName: "World ex-US", desc: "Developed markets excluyendo USA (Europa, Japón) · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
-  { id: "msft",  name: "MSFT (Growth)",               shortName: "MSFT",           desc: "Microsoft · stock individual growth (configurable)", cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
-  { id: "uber",  name: "UBER (Value)",                shortName: "UBER",           desc: "Uber Technologies · stock individual value (configurable)", cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
+  { id: "msft",  name: "Activo 1 JL (default MSFT)",   shortName: "Activo 1 JL",    desc: "Stock individual configurable (slot 1)", cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
+  { id: "uber",  name: "Activo 2 JL (default UBER)",   shortName: "Activo 2 JL",    desc: "Stock individual configurable (slot 2)", cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
   // USD - Refugio
   { id: "igln",  name: "Oro (IGLN)",                  shortName: "Oro",            desc: "ETF físico oro · cobertura inflación + tail risk", cur: "USD", cat: "Refugio / Commodities", ret: 0.050, vol: 0.1729, minW: 0.03, maxW: 0.10, defW: 0.05, retLow: 0.04, retHigh: 0.06, histRet: 0.1994, isCash: false },
   // USD - Renta Fija
@@ -53,6 +53,11 @@ const DATA_META = {
   // pensov correlations are synthetic (no public Peru sovereign bond ticker that aligned)
   realSigmaBil: 0.00258,
 };
+
+// PENSOV: opciones de σ (6.00% a 9.00% en pasos de 0.25%, 13 valores)
+const PENSOV_SIGMA_OPTIONS = Array.from({ length: 13 }, (_, i) =>
+  Math.round((0.06 + i * 0.0025) * 10000) / 10000
+);
 
 const N = ASSETS.length;
 const RISK_FREE = 0.045; // for Sharpe
@@ -1489,6 +1494,10 @@ export default function Calculadora() {
   const [growthAsset, setGrowthAsset] = useState({ ticker: "MSFT", retLow: 0.11, retHigh: 0.14 });
   const [valueAsset, setValueAsset] = useState({ ticker: "UBER", retLow: 0.09, retHigh: 0.12 });
 
+  // PENSOV (bono soberano peruano sintético): el usuario controla σ con dropdown
+  // porque no tiene ticker en yfinance. Rango 6%-9% en pasos de 0.25%.
+  const [pensovSigma, setPensovSigma] = useState(0.07);
+
   // ==========================================================
   // Cuando se carga (o cambia) marketData:
   //   1) sincronizar los tickers Growth/Value con los que el usuario
@@ -1524,9 +1533,16 @@ export default function Calculadora() {
       asset.damodaran     = a.ret;
       asset.hist1yMin     = undefined;
       asset.consensusSource = undefined;
+      asset.tickerMeta    = undefined;
       // Apply marketData (real yfinance values) — overrides fallbacks
       if (marketData) {
-        if (typeof marketData.sigma?.[baseKey] === "number") asset.vol = marketData.sigma[baseKey];
+        // σ: si el JSON dice 0 para un activo no-cash, preservar el hardcoded
+        // (protege contra sintéticos como pensov que el Python no puede medir y
+        // pone como 0 si no tiene los overrides de SYNTHETIC_SIGMAS).
+        const jsonSigma = marketData.sigma?.[baseKey];
+        if (typeof jsonSigma === "number" && (jsonSigma > 0 || a.isCash)) {
+          asset.vol = jsonSigma;
+        }
         if (typeof marketData.histRet?.[baseKey] === "number") asset.histRet = marketData.histRet[baseKey];
         if (typeof marketData.damodaran?.[baseKey] === "number") asset.damodaran = marketData.damodaran[baseKey];
         if (typeof marketData.hist_1y_min?.[baseKey] === "number") asset.hist1yMin = marketData.hist_1y_min[baseKey];
@@ -1537,12 +1553,16 @@ export default function Calculadora() {
           if (typeof c.high === "number") asset.consensusHigh = c.high;
           asset.consensusSource = c.source;
         }
+        // Ticker metadata (longName + summary del yfinance)
+        if (marketData.ticker_meta?.[baseKey]) {
+          asset.tickerMeta = marketData.ticker_meta[baseKey];
+        }
       }
-      // Override growth/value editable slots
+      // Override slots editables (idx 3, 4): renombrados a "Activo 1 JL" / "Activo 2 JL"
       if (i === 3) return {
         ...asset,
         id: growthAsset.ticker.toLowerCase(),
-        name: `Acción Growth: ${growthAsset.ticker || "—"}`,
+        name: `Activo 1 JL: ${growthAsset.ticker || "—"}`,
         retLow: growthAsset.retLow,
         retHigh: growthAsset.retHigh,
         editable: true,
@@ -1551,18 +1571,48 @@ export default function Calculadora() {
       if (i === 4) return {
         ...asset,
         id: valueAsset.ticker.toLowerCase(),
-        name: `Acción Value: ${valueAsset.ticker || "—"}`,
+        name: `Activo 2 JL: ${valueAsset.ticker || "—"}`,
         retLow: valueAsset.retLow,
         retHigh: valueAsset.retHigh,
         editable: true,
         kind: "value",
       };
+      // Override pensov σ con el valor del dropdown (siempre — el Python no tiene
+      // data real para este sintético, el usuario lo controla manualmente).
+      if (a.id === "pensov") {
+        asset.vol = pensovSigma;
+      }
       return asset;
     });
-  }, [growthAsset, valueAsset, marketData]);
+  }, [growthAsset, valueAsset, marketData, pensovSigma]);
 
   // Effective correlation matrix: from marketData if loaded, else from the hardcoded C.
-  const effectiveC = useMemo(() => marketData?.correlation || C, [marketData]);
+  // Effective correlation matrix: del JSON si está cargado, sino la hardcodeada C.
+  // FIX defensivo: si el JSON tiene fila/columna toda en 0 para un activo no-cash
+  // (sintético sin data, como pensov), usar los valores de la matriz C hardcodeada
+  // en esa fila/columna específica.
+  const effectiveC = useMemo(() => {
+    if (!marketData?.correlation) return C;
+    const M = marketData.correlation.map(row => row.slice()); // copia
+    const n = M.length;
+    for (let i = 0; i < n; i++) {
+      const asset = ASSETS[i];
+      if (!asset || asset.isCash) continue;
+      // Suma de absolutos en la fila i excluyendo la diagonal
+      let rowSum = 0;
+      for (let j = 0; j < n; j++) {
+        if (i !== j) rowSum += Math.abs(M[i][j]);
+      }
+      // Si la fila está toda en 0 (excepto diagonal), copiar de la matriz hardcodeada C
+      if (rowSum < 1e-9) {
+        for (let j = 0; j < n; j++) {
+          M[i][j] = C[i][j];
+          M[j][i] = C[j][i];
+        }
+      }
+    }
+    return M;
+  }, [marketData]);
 
   // ==========================================================
   // DEFAULT RATE PER ASSET
@@ -1687,14 +1737,14 @@ export default function Calculadora() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-optimizar al cambiar cualquiera de los toggles de restricciones.
+  // Re-optimizar al cambiar cualquiera de los toggles de restricciones o pensov σ.
   // Se omite la primera corrida (manejada por el effect de arriba).
   useEffect(() => {
     if (markowitz && !markowitzRunning) {
       runOptimizer();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enforceMinFloors, enforceMaxCaps]);
+  }, [enforceMinFloors, enforceMaxCaps, pensovSigma]);
 
   const runBacktestSim = useCallback(() => {
     if (!marketData?.monthly_returns || !marketData?.monthly_dates) {
@@ -2342,6 +2392,8 @@ export default function Calculadora() {
                                  it.kind === "value"  ? (r) => setValueAsset({ ...valueAsset, ...r }) : undefined}
                   hasMarketData={!!marketData}
                   enforceMaxCaps={enforceMaxCaps}
+                  pensovSigma={pensovSigma}
+                  setPensovSigma={setPensovSigma}
                 />
               ))}
             </div>
@@ -3989,11 +4041,13 @@ function Stat({ label, value, accent }) {
   );
 }
 
-function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerChange, onRangeChange, hasMarketData, enforceMaxCaps }) {
+function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerChange, onRangeChange, hasMarketData, enforceMaxCaps, pensovSigma, setPensovSigma }) {
   const effRet = asset.isCash ? customRet * (1 - taxRate) : customRet;
   // Tope recomendado para este activo (solo si σ > 25%)
   const capW = recommendedMaxW(asset);
   const hasCap = capW < 1.0;
+  // Pensov: σ es configurable por el usuario (sin ticker en yfinance)
+  const isPensov = asset.id === "pensov";
 
   // ============ Construir umbrales y separarlos en ARRIBA / ABAJO ============
   // ARRIBA (datos fundamentales/realizados): Damodaran, Histórica 10y
@@ -4012,15 +4066,23 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
 
   const allThresholds = [...upperThresholds, ...lowerThresholds];
 
-  // Rango del slider: incluir todos los thresholds + customRet, padding 5%
-  const allValues = [...allThresholds.map(t => t.value), customRet];
-  const minVal = Math.min(...allValues);
-  const maxVal = Math.max(...allValues);
-  const span = Math.max(maxVal - minVal, 0.02);
-  const minRet = minVal - span * 0.05;
-  const maxRet = maxVal + span * 0.05;
+  // RANGO FIJO del slider: 0% a 30% para todos los activos (armonía visual).
+  // Umbrales fuera de este rango (típicamente Mín 1y muy negativo o
+  // Consenso optimista de MSFT/UBER/BTC >30%) se OMITEN visualmente.
+  // El thumb se clampa al edge si customRet cae fuera.
+  const minRet = 0;
+  const maxRet = 0.30;
   const step = 0.0005;
   const pctOf = (v) => Math.max(0, Math.min(100, ((v - minRet) / (maxRet - minRet)) * 100));
+
+  // Filtrar umbrales visibles (dentro del rango). Los que quedan fuera
+  // simplemente no se renderizan en la barra.
+  const visibleUpperThresholds = upperThresholds.filter(t => t.value >= minRet && t.value <= maxRet);
+  const visibleLowerThresholds = lowerThresholds.filter(t => t.value >= minRet && t.value <= maxRet);
+  const visibleAllThresholds = [...visibleUpperThresholds, ...visibleLowerThresholds];
+
+  // Flag: hay umbrales fuera del rango (para mostrar hint)
+  const hiddenThresholds = allThresholds.filter(t => t.value < minRet || t.value > maxRet);
 
   return (
     <div style={{
@@ -4033,7 +4095,7 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
           {asset.editable ? (
             <>
               <span style={styles.editableLabel}>
-                {asset.kind === "growth" ? "Acción Growth:" : "Acción Value:"}
+                {asset.kind === "growth" ? "Activo 1 JL:" : "Activo 2 JL:"}
               </span>
               <input
                 type="text"
@@ -4058,7 +4120,25 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
             <>
               <span style={styles.assetName}>{asset.name}</span>
               <span style={styles.tag}>{asset.cur}</span>
-              <span style={styles.assetSigmaTop}>σ {fmtPct(asset.vol, 1)}</span>
+              {isPensov && setPensovSigma ? (
+                <span style={styles.assetSigmaTop}>
+                  σ{" "}
+                  <select
+                    value={pensovSigma.toFixed(4)}
+                    onChange={(e) => setPensovSigma(parseFloat(e.target.value))}
+                    style={styles.pensovSigmaSelect}
+                    title="σ del bono soberano peruano · ajustable porque no tiene ticker en yfinance"
+                  >
+                    {PENSOV_SIGMA_OPTIONS.map(v => (
+                      <option key={v.toFixed(4)} value={v.toFixed(4)}>
+                        {(v * 100).toFixed(2)}%
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              ) : (
+                <span style={styles.assetSigmaTop}>σ {fmtPct(asset.vol, 1)}</span>
+              )}
               {hasCap && (
                 <span style={enforceMaxCaps ? styles.capBadgeActive : styles.capBadgeInactive}
                       title={enforceMaxCaps
@@ -4079,10 +4159,35 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
           </span>
         </div>
 
-        {/* Descripción breve del activo */}
-        {asset.desc && !asset.editable && (
-          <div style={styles.assetDesc}>{asset.desc}</div>
-        )}
+        {/* Long name (yfinance) + descripción del activo */}
+        {(() => {
+          const meta = asset.tickerMeta;
+          const ln   = meta?.longName;
+          // longName solo si es distinto del nombre que ya mostramos arriba (evita duplicados)
+          const showLongName = ln && !asset.name.toLowerCase().includes(ln.toLowerCase().slice(0, 12));
+          // summary del JSON > desc hardcoded > nada
+          const summary = (meta?.summary || asset.desc || "").trim();
+          const truncated = summary.length > 220 ? summary.slice(0, 220).trim() + "…" : summary;
+          if (!showLongName && !truncated) return null;
+          return (
+            <div style={styles.assetMetaBlock}>
+              {showLongName && (
+                <div style={styles.assetLongName}>{ln}</div>
+              )}
+              {truncated && (
+                <div style={styles.assetDesc} title={summary.length > 220 ? summary : undefined}>
+                  {truncated}
+                </div>
+              )}
+              {meta?.sector && meta?.industry && (
+                <div style={styles.assetSectorRow}>
+                  <span style={styles.assetSectorTag}>{meta.sector}</span>
+                  <span style={styles.assetIndustryTag}>{meta.industry}</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Info row (consenso source, tax, range si editable) */}
         {(asset.consensusSource || asset.isCash || asset.editable) && (
@@ -4131,78 +4236,83 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
           </div>
         )}
 
-        {/* ============ Barra integrada con labels arriba/abajo ============ */}
-        {allThresholds.length > 0 && (
-          <div style={styles.thresholdBarWrap}>
-            {/* === Labels ARRIBA: Damodaran + Histórica === */}
-            <div style={styles.thresholdLabelsTop}>
-              {upperThresholds.map((t) => (
-                <button
-                  key={t.key + "-top"}
-                  onClick={() => onRetChange(t.value)}
-                  style={{
-                    ...styles.thresholdBtnTop,
-                    left: `${pctOf(t.value)}%`,
-                    color: t.color,
-                  }}
-                  title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
-                >
-                  <div style={styles.thresholdBtnLabel}>{t.label}</div>
-                  <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
-                </button>
-              ))}
-            </div>
-
-            {/* === Track con tick lines + slider integrado === */}
-            <div style={styles.thresholdTrackInteractive}>
-              {/* Fondo gris de la barra */}
-              <div style={styles.thresholdTrackBg} />
-              {/* Líneas verticales en cada umbral (decorativas) */}
-              {allThresholds.map(t => (
-                <div
-                  key={t.key + "-line"}
-                  style={{
-                    ...styles.thresholdTickLine,
-                    left: `${pctOf(t.value)}%`,
-                    background: t.color,
-                  }}
-                  title={`${t.label}: ${fmtPct(t.value, 2)}`}
-                />
-              ))}
-              {/* Slider — input range con track transparente; el thumb es el "pulgar" rojo */}
-              <input
-                type="range"
-                min={minRet}
-                max={maxRet}
-                step={step}
-                value={customRet}
-                onChange={(e) => onRetChange(parseFloat(e.target.value))}
-                style={styles.thresholdRangeInput}
-                className="threshold-slider"
-                aria-label={`Rentabilidad esperada de ${asset.name}`}
-              />
-            </div>
-
-            {/* === Labels ABAJO: Mín 1y + 3 escenarios consenso === */}
-            <div style={styles.thresholdLabelsBottom}>
-              {lowerThresholds.map((t) => (
-                <button
-                  key={t.key + "-bot"}
-                  onClick={() => onRetChange(t.value)}
-                  style={{
-                    ...styles.thresholdBtnBottom,
-                    left: `${pctOf(t.value)}%`,
-                    color: t.color,
-                  }}
-                  title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
-                >
-                  <div style={styles.thresholdBtnLabel}>{t.label}</div>
-                  <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
-                </button>
-              ))}
-            </div>
+        {/* ============ Barra integrada con labels arriba/abajo (rango fijo 0-30%) ============ */}
+        <div style={styles.thresholdBarWrap}>
+          {/* === Labels ARRIBA: Damodaran + Histórica === */}
+          <div style={styles.thresholdLabelsTop}>
+            {visibleUpperThresholds.map((t) => (
+              <button
+                key={t.key + "-top"}
+                onClick={() => onRetChange(t.value)}
+                style={{
+                  ...styles.thresholdBtnTop,
+                  left: `${pctOf(t.value)}%`,
+                  color: t.color,
+                }}
+                title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
+              >
+                <div style={styles.thresholdBtnLabel}>{t.label}</div>
+                <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
+              </button>
+            ))}
           </div>
-        )}
+
+          {/* === Track con tick lines + slider integrado === */}
+          <div style={styles.thresholdTrackInteractive}>
+            {/* Fondo gris de la barra con marcadores de escala (0%, 10%, 20%, 30%) */}
+            <div style={styles.thresholdTrackBg} />
+            {/* Líneas verticales en cada umbral visible (decorativas) */}
+            {visibleAllThresholds.map(t => (
+              <div
+                key={t.key + "-line"}
+                style={{
+                  ...styles.thresholdTickLine,
+                  left: `${pctOf(t.value)}%`,
+                  background: t.color,
+                }}
+                title={`${t.label}: ${fmtPct(t.value, 2)}`}
+              />
+            ))}
+            {/* Slider — input range con track transparente; el thumb es el "pulgar" rojo */}
+            <input
+              type="range"
+              min={minRet}
+              max={maxRet}
+              step={step}
+              value={Math.max(minRet, Math.min(maxRet, customRet))}
+              onChange={(e) => onRetChange(parseFloat(e.target.value))}
+              style={styles.thresholdRangeInput}
+              className="threshold-slider"
+              aria-label={`Rentabilidad esperada de ${asset.name}`}
+            />
+          </div>
+
+          {/* === Labels ABAJO: Mín 1y + 3 escenarios consenso === */}
+          <div style={styles.thresholdLabelsBottom}>
+            {visibleLowerThresholds.map((t) => (
+              <button
+                key={t.key + "-bot"}
+                onClick={() => onRetChange(t.value)}
+                style={{
+                  ...styles.thresholdBtnBottom,
+                  left: `${pctOf(t.value)}%`,
+                  color: t.color,
+                }}
+                title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
+              >
+                <div style={styles.thresholdBtnLabel}>{t.label}</div>
+                <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* Hint si hay umbrales fuera del rango 0-30% */}
+          {hiddenThresholds.length > 0 && (
+            <div style={styles.thresholdHidden} title={hiddenThresholds.map(t => `${t.label}: ${fmtPct(t.value, 2)}`).join(" · ")}>
+              {hiddenThresholds.length} umbral{hiddenThresholds.length > 1 ? "es" : ""} fuera de rango: {hiddenThresholds.map(t => `${t.label} ${fmtPct(t.value, 0)}`).join(" · ")}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Weight display (read-only, from Markowitz) */}
@@ -5938,6 +6048,19 @@ const styles = {
     fontSize: 10,
     color: "var(--ink-muted)",
   },
+  pensovSigmaSelect: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    fontWeight: 600,
+    color: "var(--accent)",
+    background: "var(--surface)",
+    border: "1px solid var(--accent)",
+    borderRadius: 2,
+    padding: "1px 4px",
+    cursor: "pointer",
+    fontVariantNumeric: "tabular-nums",
+    marginLeft: 2,
+  },
   capBadgeActive: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 9.5,
@@ -6778,6 +6901,46 @@ const styles = {
     lineHeight: 1.4,
     fontStyle: "italic",
   },
+  assetMetaBlock: {
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  assetLongName: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--ink)",
+    marginBottom: 2,
+    fontFamily: "'Fraunces', serif",
+    letterSpacing: "-0.005em",
+  },
+  assetSectorRow: {
+    display: "flex",
+    gap: 6,
+    marginTop: 4,
+    flexWrap: "wrap",
+  },
+  assetSectorTag: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.05em",
+    textTransform: "uppercase",
+    padding: "1px 6px",
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    color: "var(--ink)",
+    fontWeight: 600,
+    borderRadius: 2,
+  },
+  assetIndustryTag: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.04em",
+    padding: "1px 6px",
+    background: "transparent",
+    border: "1px dashed var(--border-strong)",
+    color: "var(--ink-muted)",
+    borderRadius: 2,
+  },
   assetSourceRow: {
     display: "flex",
     alignItems: "center",
@@ -6912,6 +7075,15 @@ const styles = {
     fontVariantNumeric: "tabular-nums",
     color: "var(--ink-muted)",
     lineHeight: 1,
+  },
+  thresholdHidden: {
+    marginTop: 4,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    color: "var(--ink-muted)",
+    fontStyle: "italic",
+    letterSpacing: "0.02em",
+    opacity: 0.7,
   },
 
   // ============ Panel de impuestos compacto (al final del tab) ============

@@ -13,29 +13,29 @@ import {
 // ============================================================
 const ASSETS = [
   // USD - Renta Variable
-  { id: "cspx",  name: "ETF S&P 500 (CSPX/VUAA)",     cur: "USD", cat: "Renta Variable USD",   ret: 0.090, vol: 0.1803, minW: 0.10, maxW: 0.25, defW: 0.15, retLow: 0.08, retHigh: 0.10, histRet: 0.1662, isCash: false },
-  { id: "cndx",  name: "ETF Nasdaq 100 (CNDX)",       cur: "USD", cat: "Renta Variable USD",   ret: 0.110, vol: 0.2207, minW: 0.05, maxW: 0.15, defW: 0.08, retLow: 0.10, retHigh: 0.12, histRet: 0.2258, isCash: false },
-  { id: "iwda",  name: "MSCI World ex-USA Acc (EXUS.L)", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
-  { id: "msft",  name: "MSFT (Growth)",               cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
-  { id: "uber",  name: "UBER (Value)",                cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
+  { id: "cspx",  name: "ETF S&P 500 (CSPX/VUAA)",     shortName: "S&P 500",        desc: "500 mayores empresas USA · acc UCITS Irlanda", cur: "USD", cat: "Renta Variable USD",   ret: 0.090, vol: 0.1803, minW: 0.10, maxW: 0.25, defW: 0.15, retLow: 0.08, retHigh: 0.10, histRet: 0.1662, isCash: false },
+  { id: "cndx",  name: "ETF Nasdaq 100 (CNDX)",       shortName: "Nasdaq 100",     desc: "100 mayores tech-heavy USA · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.110, vol: 0.2207, minW: 0.05, maxW: 0.15, defW: 0.08, retLow: 0.10, retHigh: 0.12, histRet: 0.2258, isCash: false },
+  { id: "iwda",  name: "MSCI World ex-USA Acc (EXUS.L)", shortName: "World ex-US", desc: "Developed markets excluyendo USA (Europa, Japón) · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
+  { id: "msft",  name: "MSFT (Growth)",               shortName: "MSFT",           desc: "Microsoft · stock individual growth (configurable)", cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
+  { id: "uber",  name: "UBER (Value)",                shortName: "UBER",           desc: "Uber Technologies · stock individual value (configurable)", cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
   // USD - Refugio
-  { id: "igln",  name: "Oro (IGLN)",                  cur: "USD", cat: "Refugio / Commodities", ret: 0.050, vol: 0.1729, minW: 0.03, maxW: 0.10, defW: 0.05, retLow: 0.04, retHigh: 0.06, histRet: 0.1994, isCash: false },
+  { id: "igln",  name: "Oro (IGLN)",                  shortName: "Oro",            desc: "ETF físico oro · cobertura inflación + tail risk", cur: "USD", cat: "Refugio / Commodities", ret: 0.050, vol: 0.1729, minW: 0.03, maxW: 0.10, defW: 0.05, retLow: 0.04, retHigh: 0.06, histRet: 0.1994, isCash: false },
   // USD - Renta Fija
-  { id: "vtc",   name: "Bonos Corp Acc (LQDA.L)",     cur: "USD", cat: "Renta Fija USD",       ret: 0.050, vol: 0.0842, minW: 0.03, maxW: 0.15, defW: 0.06, retLow: 0.045, retHigh: 0.055, histRet: 0.0238, isCash: false },
-  { id: "bil",   name: "Treasury 0-1Y Acc (ZPR1.L)",  cur: "USD", cat: "Renta Fija USD",       ret: 0.0475, vol: 0.00, minW: 0.02, maxW: 0.10, defW: 0.04, retLow: 0.045, retHigh: 0.050, histRet: 0.0270, isCash: true },
-  { id: "ief",   name: "Treasury 7-10Y Acc (CBU7.L)", cur: "USD", cat: "Renta Fija USD",       ret: 0.0425, vol: 0.0743, minW: 0.03, maxW: 0.12, defW: 0.06, retLow: 0.040, retHigh: 0.045, histRet: 0.0063, isCash: false },
+  { id: "vtc",   name: "Bonos Corp Acc (LQDA.L)",     shortName: "Bonos Corp",     desc: "USD investment-grade corporate bonds · acc UCITS", cur: "USD", cat: "Renta Fija USD",       ret: 0.050, vol: 0.0842, minW: 0.03, maxW: 0.15, defW: 0.06, retLow: 0.045, retHigh: 0.055, histRet: 0.0238, isCash: false },
+  { id: "bil",   name: "Treasury 0-1Y Acc (ZPR1.L)",  shortName: "Treasury 0-1Y",  desc: "Treasury bills USA ultra-corto · proxy money market", cur: "USD", cat: "Renta Fija USD",       ret: 0.0475, vol: 0.00, minW: 0.02, maxW: 0.10, defW: 0.04, retLow: 0.045, retHigh: 0.050, histRet: 0.0270, isCash: true },
+  { id: "ief",   name: "Treasury 7-10Y Acc (CBU7.L)", shortName: "Treasury 10Y",   desc: "Treasury bonds USA duración intermedia · diversificador", cur: "USD", cat: "Renta Fija USD",       ret: 0.0425, vol: 0.0743, minW: 0.03, maxW: 0.12, defW: 0.06, retLow: 0.040, retHigh: 0.045, histRet: 0.0063, isCash: false },
   // USD - Especulativo
-  { id: "btc",   name: "Bitcoin",                     cur: "USD", cat: "Especulativo",         ret: 0.200, vol: 0.6439, minW: 0.05, maxW: 0.05, defW: 0.05, retLow: 0.15, retHigh: 0.25, histRet: 0.4416, isCash: false },
+  { id: "btc",   name: "Bitcoin",                     shortName: "Bitcoin",        desc: "Crypto · alta vol · tope 5% por gestión prudencial", cur: "USD", cat: "Especulativo",         ret: 0.200, vol: 0.6439, minW: 0.05, maxW: 0.05, defW: 0.05, retLow: 0.15, retHigh: 0.25, histRet: 0.4416, isCash: false },
   // USD - Cash
-  { id: "ibsav", name: "Cuenta Ahorros IB (USD)",     cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0314, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.04, retLow: 0.03, retHigh: 0.0314, histRet: 0.015, isCash: true },
-  { id: "cdusd", name: "Plazo Fijo CD (USD)",         cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0325, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.03, retLow: 0.020, retHigh: 0.045, histRet: 0.020, isCash: true },
+  { id: "ibsav", name: "Cuenta Ahorros IB (USD)",     shortName: "Ahorros IB",     desc: "Interactive Brokers cash sweep USD · liquidez total", cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0314, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.04, retLow: 0.03, retHigh: 0.0314, histRet: 0.015, isCash: true },
+  { id: "cdusd", name: "Plazo Fijo CD (USD)",         shortName: "CD USD",         desc: "Certificate of Deposit USD · plazo fijo bancario", cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0325, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.03, retLow: 0.020, retHigh: 0.045, histRet: 0.020, isCash: true },
   // PEN - Renta Variable
-  { id: "epu",   name: "EPU - proxy El Dorado RV",    cur: "PEN", cat: "Perú - Renta Variable", ret: 0.080, vol: 0.2636, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.07, retHigh: 0.09, histRet: 0.1717, isCash: false },
+  { id: "epu",   name: "EPU - proxy El Dorado RV",    shortName: "EPU Perú",       desc: "ETF mercado Perú · proxy de RV local concentrada", cur: "PEN", cat: "Perú - Renta Variable", ret: 0.080, vol: 0.2636, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.07, retHigh: 0.09, histRet: 0.1717, isCash: false },
   // PEN - Renta Fija (synthetic — no public ticker)
-  { id: "pensov",name: "Bonos Soberanos PEN (sint.)", cur: "PEN", cat: "Perú - Renta Fija",    ret: 0.060, vol: 0.07, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.055, retHigh: 0.065, histRet: 0.045, isCash: false },
+  { id: "pensov",name: "Bonos Soberanos PEN (sint.)", shortName: "Bonos Sob PEN",  desc: "Bonos soberanos Perú · sintético (sin ticker público)", cur: "PEN", cat: "Perú - Renta Fija",    ret: 0.060, vol: 0.07, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.055, retHigh: 0.065, histRet: 0.045, isCash: false },
   // PEN - Cash
-  { id: "pfpen", name: "Plazo Fijo PEN",              cur: "PEN", cat: "Cash / Equivalentes",  ret: 0.0475, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.02, retLow: 0.040, retHigh: 0.055, histRet: 0.045, isCash: true },
-  { id: "savpen",name: "Cuenta Ahorros PEN",          cur: "PEN", cat: "Cash / Equivalentes",  ret: 0.045, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.02, retLow: 0.040, retHigh: 0.050, histRet: 0.035, isCash: true },
+  { id: "pfpen", name: "Plazo Fijo PEN",              shortName: "Plazo Fijo PEN", desc: "Plazo fijo soles · tasa local bancaria", cur: "PEN", cat: "Cash / Equivalentes",  ret: 0.0475, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.02, retLow: 0.040, retHigh: 0.055, histRet: 0.045, isCash: true },
+  { id: "savpen",name: "Cuenta Ahorros PEN",          shortName: "Ahorros PEN",    desc: "Cuenta ahorros soles · liquidez inmediata", cur: "PEN", cat: "Cash / Equivalentes",  ret: 0.045, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.02, retLow: 0.040, retHigh: 0.050, histRet: 0.035, isCash: true },
 ];
 
 // Metadata of the real-data download (from yfinance)
@@ -129,6 +129,20 @@ function randn() {
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+// ============================================================
+// CAP RECOMENDADO POR VOLATILIDAD
+// Tope máximo que un activo debería tener en una cartera Markowitz "prudencial":
+//   σ > 50%: 5%  (BTC, UBER) — tail risk severo
+//   σ > 25%: 10% (MSFT, EPU) — alta volatilidad single-name/concentrado
+//   resto:  100% (sin tope)
+// Cuando el toggle "Topes por volatilidad" está OFF, todos quedan en 100%.
+// ============================================================
+function recommendedMaxW(asset) {
+  if (asset.vol > 0.50) return 0.05;
+  if (asset.vol > 0.25) return 0.10;
+  return 1.0;
 }
 
 // Portfolio-level moments given weights vector and effective returns array
@@ -1531,14 +1545,13 @@ export default function Calculadora() {
 
   // ==========================================================
   // DEFAULT RATE PER ASSET
-  // Promedio simple de: consenso neutral + Damodaran + histórica 10y.
-  // Si falta alguno, promedia los que haya. Si no hay ninguno, cae a asset.ret.
+  // Promedio simple de: consenso neutral + Damodaran.
+  // Si falta alguno, usa el que haya. Si no hay ninguno, cae a asset.ret.
   // ==========================================================
   const defaultReturnFor = (asset) => {
     const vals = [];
     if (typeof asset.consensusMean === "number" && isFinite(asset.consensusMean)) vals.push(asset.consensusMean);
     if (typeof asset.damodaran    === "number" && isFinite(asset.damodaran))    vals.push(asset.damodaran);
-    if (typeof asset.histRet      === "number" && isFinite(asset.histRet))      vals.push(asset.histRet);
     if (vals.length === 0) return asset.ret;
     return vals.reduce((a, b) => a + b, 0) / vals.length;
   };
@@ -1582,17 +1595,25 @@ export default function Calculadora() {
   const [markowitzRunning, setMarkowitzRunning] = useState(false);
   const [activePortfolio, setActivePortfolio] = useState("neutra");  // 'conservadora' | 'neutra' | 'agresiva'
   const [returnsAtLastOpt, setReturnsAtLastOpt] = useState(null);    // for stale detection
-  // ROBUST OPTIMIZATION: por default no se exigen pisos mínimos por activo
-  // (el optimizador puede dejar activos en 0% si no aportan). Toggle ON
-  // recupera el comportamiento viejo con pisos.
+  // ROBUST OPTIMIZATION (toggle 1 — controla pisos mínimos):
+  //   OFF (default): minW = 0 — el optimizador puede descartar activos.
+  //   ON: minW = hardcoded (fuerza diversificación mínima por activo).
   const [enforceMinFloors, setEnforceMinFloors] = useState(false);
 
-  // Vista derivada de los assets que se pasa al optimizador:
-  // si robusto está activo (default), minW=0 para todos los activos. maxW se respeta siempre.
+  // CAPS POR VOLATILIDAD (toggle 2 — controla techos solo en activos σ > 25%):
+  //   ON (default): aplica topes recomendados a activos volátiles.
+  //   OFF: maxW = 1 para todos (sin techos, Markowitz puro).
+  const [enforceMaxCaps, setEnforceMaxCaps] = useState(true);
+
+  // Vista derivada que se pasa al optimizador.
+  // Combina ambos toggles de forma independiente.
   const effectiveAssetsForOpt = useMemo(() => {
-    if (enforceMinFloors) return effectiveAssets;
-    return effectiveAssets.map(a => ({ ...a, minW: 0 }));
-  }, [effectiveAssets, enforceMinFloors]);
+    return effectiveAssets.map(a => ({
+      ...a,
+      minW: enforceMinFloors ? a.minW : 0,
+      maxW: enforceMaxCaps   ? recommendedMaxW(a) : 1,
+    }));
+  }, [effectiveAssets, enforceMinFloors, enforceMaxCaps]);
 
   // Backtesting state
   const [rebalanceFreq, setRebalanceFreq] = useState(3);
@@ -1645,14 +1666,14 @@ export default function Calculadora() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-optimizar al cambiar el toggle de pisos mínimos (cambia la frontera).
+  // Re-optimizar al cambiar cualquiera de los toggles de restricciones.
   // Se omite la primera corrida (manejada por el effect de arriba).
   useEffect(() => {
     if (markowitz && !markowitzRunning) {
       runOptimizer();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enforceMinFloors]);
+  }, [enforceMinFloors, enforceMaxCaps]);
 
   const runBacktestSim = useCallback(() => {
     if (!marketData?.monthly_returns || !marketData?.monthly_dates) {
@@ -2187,7 +2208,7 @@ export default function Calculadora() {
               <div style={styles.compositionHint}>
                 Los <strong>pesos</strong> vienen del optimizador Markowitz (no editables aquí).
                 Mueve la rentabilidad de cada activo arrastrando el thumb (rojo) o haciendo click en cualquier umbral.
-                El default es el promedio simple de: consenso neutral · Damodaran · histórica 10y.
+                El default es el promedio simple de consenso neutral y Damodaran.
               </div>
             </div>
             <div style={styles.portfolioSwitcher}>
@@ -2214,27 +2235,42 @@ export default function Calculadora() {
             </div>
           </div>
 
-          {/* Robust toggle + Reset rentabilidades */}
+          {/* Toggles de restricciones + Reset rentabilidades */}
           <div style={styles.cartControlBar}>
-            <label style={styles.robustToggleLabel}>
-              <input
-                type="checkbox"
-                checked={!enforceMinFloors}
-                onChange={(e) => setEnforceMinFloors(!e.target.checked)}
-                style={{ marginRight: 8 }}
-              />
-              <strong>Markowitz robusto</strong>
-              <span style={styles.robustToggleHint}>
-                Permite que el optimizador descarte activos completamente (min = 0%).
-                Apaga para forzar pisos mínimos por activo.
-              </span>
-            </label>
+            <div style={styles.cartToggles}>
+              <label style={styles.robustToggleLabel}>
+                <input
+                  type="checkbox"
+                  checked={!enforceMinFloors}
+                  onChange={(e) => setEnforceMinFloors(!e.target.checked)}
+                  style={{ marginRight: 8 }}
+                />
+                <strong>Markowitz robusto</strong>
+                <span style={styles.robustToggleHint}>
+                  Permite que un activo quede en 0% (sin pisos).
+                  Apagado: pisos mínimos forzados por activo.
+                </span>
+              </label>
+              <label style={styles.robustToggleLabel}>
+                <input
+                  type="checkbox"
+                  checked={enforceMaxCaps}
+                  onChange={(e) => setEnforceMaxCaps(e.target.checked)}
+                  style={{ marginRight: 8 }}
+                />
+                <strong>Topes por volatilidad</strong>
+                <span style={styles.robustToggleHint}>
+                  Limita σ &gt; 50% al 5% · σ entre 25-50% al 10%.
+                  Apagado: Markowitz puro (puede concentrar 100% en un activo).
+                </span>
+              </label>
+            </div>
             <button
               onClick={resetReturnsToAutoDefault}
               style={styles.resetRetBtn}
-              title="Restaurar todas las rentabilidades al promedio simple de consenso neutral + Damodaran + histórica 10y"
+              title="Restaurar todas las rentabilidades al promedio simple de consenso neutral y Damodaran"
             >
-              ↻ Reset a promedio (consenso/Damodaran/hist)
+              ↻ Reset a promedio (consenso/Damodaran)
             </button>
           </div>
 
@@ -2284,6 +2320,7 @@ export default function Calculadora() {
                   onRangeChange={it.kind === "growth" ? (r) => setGrowthAsset({ ...growthAsset, ...r }) :
                                  it.kind === "value"  ? (r) => setValueAsset({ ...valueAsset, ...r }) : undefined}
                   hasMarketData={!!marketData}
+                  enforceMaxCaps={enforceMaxCaps}
                 />
               ))}
             </div>
@@ -2307,7 +2344,8 @@ export default function Calculadora() {
           <ul style={styles.notes}>
             <li><strong>Cash y plazos fijos tratados como activos sin riesgo (σ = 0):</strong> BIL, IB Savings USD, CD USD, Plazo Fijo PEN y Cuenta Ahorros PEN. No contribuyen a la varianza del portafolio.</li>
             <li><strong>Activos PEN sin riesgo cambiario:</strong> se asume cobertura USD/PEN activa por parte del inversor. Los retornos PEN se computan en términos locales sin overlay de FX.</li>
-            <li><strong>Markowitz robusto (default):</strong> el optimizador puede dejar un activo en 0% si no aporta. Los <em>maxW</em> sí se respetan (BTC tope 5%, EPU tope 8%, cash tope 10%, etc.) por gestión prudencial.</li>
+            <li><strong>Markowitz robusto (default):</strong> el optimizador puede dejar un activo en 0% — no se exigen pisos mínimos. Toggle OFF reactiva los pisos hardcoded.</li>
+            <li><strong>Topes por volatilidad (default ON):</strong> activos con σ &gt; 50% (BTC, UBER) capeados al 5%; σ entre 25-50% (MSFT, EPU) capeados al 10%. El resto sin tope. Toggle OFF deja Markowitz puro sin restricciones (puede concentrar 100% en un activo).</li>
             <li><strong>VaR / ES paramétricos asumen normalidad</strong> — sub-estiman cola izquierda en activos con fat tails (BTC, UBER, EPU).</li>
             <li><strong>Beta "efectivo"</strong> = promedio ponderado de β vs S&P (parte USD) y β vs EPU/BVL (parte PEN). Métrica de lectura, no CAPM puro.</li>
             <li><strong>Consenso de analistas en MSFT/UBER</strong> viene de yfinance (price targets a 12 meses). Tiende a ser optimista — úsalo como referencia, no como expectativa de largo plazo sostenido.</li>
@@ -3927,8 +3965,11 @@ function Stat({ label, value, accent }) {
   );
 }
 
-function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerChange, onRangeChange, hasMarketData }) {
+function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerChange, onRangeChange, hasMarketData, enforceMaxCaps }) {
   const effRet = asset.isCash ? customRet * (1 - taxRate) : customRet;
+  // Tope recomendado para este activo (solo si σ > 25%)
+  const capW = recommendedMaxW(asset);
+  const hasCap = capW < 1.0;
 
   // ============ Construir umbrales y separarlos en ARRIBA / ABAJO ============
   // ARRIBA (datos fundamentales/realizados): Damodaran, Histórica 10y
@@ -3980,12 +4021,28 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
               />
               <span style={styles.tag}>{asset.cur}</span>
               <span style={styles.assetSigmaTop}>σ {fmtPct(asset.vol, 1)}</span>
+              {hasCap && (
+                <span style={enforceMaxCaps ? styles.capBadgeActive : styles.capBadgeInactive}
+                      title={enforceMaxCaps
+                        ? `Tope activo: el optimizador no puede asignar más de ${fmtPct(capW,0)} a este activo (σ ${fmtPct(asset.vol,1)})`
+                        : `Tope sugerido ${fmtPct(capW,0)} (no aplicado · activa "Topes por volatilidad")`}>
+                  tope {fmtPct(capW, 0)}
+                </span>
+              )}
             </>
           ) : (
             <>
               <span style={styles.assetName}>{asset.name}</span>
               <span style={styles.tag}>{asset.cur}</span>
               <span style={styles.assetSigmaTop}>σ {fmtPct(asset.vol, 1)}</span>
+              {hasCap && (
+                <span style={enforceMaxCaps ? styles.capBadgeActive : styles.capBadgeInactive}
+                      title={enforceMaxCaps
+                        ? `Tope activo: el optimizador no puede asignar más de ${fmtPct(capW,0)} a este activo (σ ${fmtPct(asset.vol,1)})`
+                        : `Tope sugerido ${fmtPct(capW,0)} (no aplicado · activa "Topes por volatilidad")`}>
+                  tope {fmtPct(capW, 0)}
+                </span>
+              )}
             </>
           )}
           <span style={styles.assetSpacer} />
@@ -3997,6 +4054,11 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
             }}>{fmtPct(customRet, 2)}</strong>
           </span>
         </div>
+
+        {/* Descripción breve del activo */}
+        {asset.desc && !asset.editable && (
+          <div style={styles.assetDesc}>{asset.desc}</div>
+        )}
 
         {/* Info row (consenso source, tax, range si editable) */}
         {(asset.consensusSource || asset.isCash || asset.editable) && (
@@ -4127,7 +4189,8 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
           <div style={styles.weightBar}>
             <div style={{
               ...styles.weightBarFill,
-              width: `${Math.min(weight / asset.maxW * 100, 100)}%`,
+              // Escala visual: peso del 50% llena la barra. Sin tope dependiente de maxW.
+              width: `${Math.min(weight * 200, 100)}%`,
             }}/>
           </div>
         )}
@@ -4305,25 +4368,43 @@ function CorrelationMatrix() {
     return "rgba(58, 90, 124, 0.85)";
   };
   const textColor = (v) => Math.abs(v) > 0.4 ? "var(--bg)" : "var(--ink)";
-  const cellSize = 38;
+  const cellSize = 42;
+  const labelColWidth = 160;  // ancho de la columna de nombres a la izquierda
   return (
     <div style={{ overflowX: "auto", background: "var(--surface)", border: "1px solid var(--border)", padding: 14 }}>
-      <table style={{ borderCollapse: "collapse", fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>
+      <table style={{ borderCollapse: "separate", borderSpacing: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>
         <thead>
+          {/* Fila de headers angulados a -45° (legibles diagonal abajo-izq → arriba-der) */}
           <tr>
-            <th style={{ width: cellSize, height: cellSize }}></th>
+            <th style={{ width: labelColWidth, height: 120, borderBottom: "1.5px solid var(--ink)" }}></th>
             {ASSETS.map((a, i) => (
               <th
                 key={i}
                 style={{
-                  width: cellSize, minWidth: cellSize, height: cellSize,
-                  writingMode: "vertical-rl", transform: "rotate(180deg)",
-                  fontSize: 9, padding: 2, fontWeight: 600,
-                  color: "var(--ink-muted)",
+                  width: cellSize, minWidth: cellSize, height: 120,
+                  padding: 0,
                   borderBottom: "1.5px solid var(--ink)",
+                  position: "relative",
+                  verticalAlign: "bottom",
                 }}
               >
-                {a.id.toUpperCase()}
+                <div
+                  style={{
+                    position: "absolute",
+                    bottom: 6,
+                    left: "50%",
+                    transformOrigin: "left bottom",
+                    transform: "translateX(0) rotate(-55deg)",
+                    whiteSpace: "nowrap",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "var(--ink)",
+                    fontFamily: "'DM Sans', sans-serif",
+                    letterSpacing: "0.01em",
+                  }}
+                >
+                  {a.shortName}
+                </div>
               </th>
             ))}
           </tr>
@@ -4332,12 +4413,20 @@ function CorrelationMatrix() {
           {ASSETS.map((aRow, i) => (
             <tr key={i}>
               <th style={{
-                width: cellSize * 2.5, height: cellSize, textAlign: "right",
-                fontSize: 9, padding: "0 8px", fontWeight: 600,
-                color: "var(--ink-muted)",
+                width: labelColWidth, height: cellSize,
+                textAlign: "right",
+                fontSize: 11.5, padding: "0 10px",
+                fontWeight: 600,
+                fontFamily: "'DM Sans', sans-serif",
+                color: "var(--ink)",
                 borderRight: "1.5px solid var(--ink)",
-              }}>
-                {aRow.id.toUpperCase()}
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+              title={aRow.name}
+              >
+                {aRow.shortName}
               </th>
               {ASSETS.map((aCol, j) => {
                 const v = C[i][j];
@@ -4352,10 +4441,11 @@ function CorrelationMatrix() {
                       textAlign: "center",
                       fontWeight: i === j ? 700 : 500,
                       border: "1px solid var(--bg)",
-                      fontSize: 10,
+                      fontSize: 10.5,
+                      fontVariantNumeric: "tabular-nums",
                       opacity: greyOut ? 0.5 : 1,
                     }}
-                    title={`Corr(${aRow.id}, ${aCol.id}) = ${v.toFixed(2)}`}
+                    title={`Corr(${aRow.shortName}, ${aCol.shortName}) = ${v.toFixed(2)}`}
                   >
                     {v.toFixed(2)}
                   </td>
@@ -4365,7 +4455,7 @@ function CorrelationMatrix() {
           ))}
         </tbody>
       </table>
-      <div style={{ display: "flex", gap: 18, marginTop: 14, fontSize: 11, color: "var(--ink-muted)", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 18, marginTop: 14, fontSize: 11, color: "var(--ink-muted)", alignItems: "center", flexWrap: "wrap" }}>
         <span>Escala:</span>
         <span><span style={{...styles.dotSquare, background: "rgba(58, 90, 124, 0.85)"}}/> &lt; -0.7</span>
         <span><span style={{...styles.dotSquare, background: "rgba(58, 90, 124, 0.30)"}}/> -0.4 a -0.2</span>
@@ -4612,14 +4702,28 @@ function BacktestLineCard({ title, subtitle, data, accent, V0 = 10000 }) {
 }
 
 function ComparisonTable({ portfolios }) {
-  // Get all assets that appear with weight > 0 in any portfolio
-  const allIdx = new Set();
-  portfolios.forEach(p => p.w.forEach((w, i) => { if (w > 0.005) allIdx.add(i); }));
-  const idxList = Array.from(allIdx).sort((a, b) => {
-    const sumB = portfolios.reduce((acc, p) => acc + p.w[b], 0);
-    const sumA = portfolios.reduce((acc, p) => acc + p.w[a], 0);
-    return sumB - sumA;
+  // Identificar qué activos aparecen con peso > 0.5% en alguna cartera
+  const usedSet = new Set();
+  portfolios.forEach(p => p.w.forEach((w, i) => { if (w > 0.005) usedSet.add(i); }));
+
+  // Agrupar por categoría, en el orden en que aparecen las categorías en ASSETS
+  // (mantiene la misma estructura visual que la pestaña Cartera I).
+  const catsOrdered = [];
+  const seenCat = new Set();
+  ASSETS.forEach((a, i) => {
+    if (!seenCat.has(a.cat)) {
+      seenCat.add(a.cat);
+      catsOrdered.push({ cat: a.cat, indices: [] });
+    }
   });
+  ASSETS.forEach((a, i) => {
+    if (!usedSet.has(i)) return;
+    const bucket = catsOrdered.find(b => b.cat === a.cat);
+    if (bucket) bucket.indices.push(i);
+  });
+  // Filtra categorías vacías
+  const groups = catsOrdered.filter(g => g.indices.length > 0);
+
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", padding: 18, overflowX: "auto" }}>
       <table style={styles.compTable}>
@@ -4632,21 +4736,46 @@ function ComparisonTable({ portfolios }) {
           </tr>
         </thead>
         <tbody>
-          {idxList.map(i => (
-            <tr key={i}>
-              <td style={styles.compTdAsset}>
-                <span style={styles.tag}>{ASSETS[i].cur}</span> {ASSETS[i].name}
-              </td>
-              {portfolios.map(p => (
-                <td key={p.label} style={{
-                  ...styles.compTd,
-                  background: `rgba(122, 27, 27, ${Math.min(p.w[i] * 2, 0.35)})`,
-                  fontWeight: p.w[i] > 0.10 ? 600 : 400,
-                }}>
-                  {p.w[i] > 0.005 ? fmtPct(p.w[i], 1) : "—"}
+          {groups.map((g, gi) => (
+            <React.Fragment key={g.cat}>
+              {/* Subheader de categoría */}
+              <tr>
+                <td colSpan={1 + portfolios.length} style={styles.compCatHeader}>
+                  {g.cat}
                 </td>
+              </tr>
+              {g.indices.map(i => (
+                <tr key={i}>
+                  <td style={styles.compTdAsset}>
+                    <span style={styles.tag}>{ASSETS[i].cur}</span>{" "}
+                    <span style={{ marginLeft: 4 }}>{ASSETS[i].name}</span>
+                  </td>
+                  {portfolios.map(p => (
+                    <td key={p.label} style={{
+                      ...styles.compTd,
+                      background: `rgba(122, 27, 27, ${Math.min(p.w[i] * 2, 0.35)})`,
+                      fontWeight: p.w[i] > 0.10 ? 600 : 400,
+                    }}>
+                      {p.w[i] > 0.005 ? fmtPct(p.w[i], 1) : "—"}
+                    </td>
+                  ))}
+                </tr>
               ))}
-            </tr>
+              {/* Subtotal de la categoría */}
+              <tr style={styles.compCatSubtotal}>
+                <td style={styles.compCatSubtotalLabel}>
+                  Σ {g.cat}
+                </td>
+                {portfolios.map(p => {
+                  const sum = g.indices.reduce((acc, i) => acc + p.w[i], 0);
+                  return (
+                    <td key={p.label} style={styles.compCatSubtotalValue}>
+                      {sum > 0.005 ? fmtPct(sum, 1) : "—"}
+                    </td>
+                  );
+                })}
+              </tr>
+            </React.Fragment>
           ))}
           <tr style={{ borderTop: "2px solid var(--ink)" }}>
             <td style={{...styles.compTdAsset, fontWeight: 600, paddingTop: 10}}>Retorno esperado</td>
@@ -5429,6 +5558,40 @@ const styles = {
     borderBottom: "1px solid var(--border)",
     fontSize: 12,
   },
+  compCatHeader: {
+    padding: "10px 10px 6px 10px",
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    fontWeight: 700,
+    color: "var(--ink)",
+    background: "var(--surface-2)",
+    borderTop: "1px solid var(--border-strong)",
+    borderBottom: "1px solid var(--border)",
+  },
+  compCatSubtotal: {
+    background: "var(--surface-2)",
+  },
+  compCatSubtotalLabel: {
+    padding: "5px 10px",
+    fontSize: 10.5,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.04em",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    borderBottom: "1px solid var(--border)",
+  },
+  compCatSubtotalValue: {
+    padding: "5px 10px",
+    textAlign: "center",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    fontWeight: 600,
+    fontVariantNumeric: "tabular-nums",
+    color: "var(--ink-muted)",
+    borderBottom: "1px solid var(--border)",
+  },
   distribIntro: {
     fontSize: 12.5,
     color: "var(--ink-muted)",
@@ -5750,7 +5913,35 @@ const styles = {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 10,
     color: "var(--ink-muted)",
-    marginLeft: "auto",
+  },
+  capBadgeActive: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    fontWeight: 700,
+    letterSpacing: "0.04em",
+    padding: "2px 7px",
+    border: "1px solid var(--accent)",
+    background: "rgba(122, 27, 27, 0.10)",
+    color: "var(--accent)",
+    borderRadius: 2,
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
+  },
+  capBadgeInactive: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    fontWeight: 500,
+    letterSpacing: "0.04em",
+    padding: "2px 7px",
+    border: "1px dashed var(--border-strong)",
+    background: "transparent",
+    color: "var(--ink-muted)",
+    borderRadius: 2,
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
+    opacity: 0.65,
   },
   retSliderRow: {
     display: "flex",
@@ -6502,14 +6693,21 @@ const styles = {
   cartControlBar: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 18,
     flexWrap: "wrap",
-    padding: "10px 14px",
+    padding: "12px 14px",
     background: "var(--surface-2)",
     border: "1px solid var(--border)",
     borderRadius: 2,
     marginBottom: 14,
+  },
+  cartToggles: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    flex: "1 1 420px",
+    minWidth: 0,
   },
   robustToggleLabel: {
     display: "flex",
@@ -6535,6 +6733,14 @@ const styles = {
     fontSize: 11,
     color: "var(--ink-muted)",
     whiteSpace: "nowrap",
+  },
+  assetDesc: {
+    fontSize: 11.5,
+    color: "var(--ink-muted)",
+    marginTop: 2,
+    marginBottom: 2,
+    lineHeight: 1.4,
+    fontStyle: "italic",
   },
   assetSourceRow: {
     display: "flex",

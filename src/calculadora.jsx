@@ -15,7 +15,7 @@ const ASSETS = [
   // USD - Renta Variable
   { id: "cspx",  name: "ETF S&P 500 (CSPX/VUAA)",     shortName: "S&P 500",        desc: "500 mayores empresas USA · acc UCITS Irlanda", cur: "USD", cat: "Renta Variable USD",   ret: 0.090, vol: 0.1803, minW: 0.10, maxW: 0.25, defW: 0.15, retLow: 0.08, retHigh: 0.10, histRet: 0.1662, isCash: false },
   { id: "cndx",  name: "ETF Nasdaq 100 (CNDX)",       shortName: "Nasdaq 100",     desc: "100 mayores tech-heavy USA · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.110, vol: 0.2207, minW: 0.05, maxW: 0.15, defW: 0.08, retLow: 0.10, retHigh: 0.12, histRet: 0.2258, isCash: false },
-  { id: "iwda",  name: "MSCI World ex-USA Acc (EXUS.L)", shortName: "World ex-US", desc: "Developed markets excluyendo USA (Europa, Japón) · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
+  { id: "iwda",  name: "Developed Markets ex USA (EFA)", shortName: "Dev ex-US", desc: "Developed markets excluyendo USA (Europa, Japón, Asia desarrollada) · USA-listed", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
   { id: "msft",  name: "Activo 1 JL (default MSFT)",   shortName: "Activo 1 JL",    desc: "Stock individual configurable (slot 1)", cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
   { id: "uber",  name: "Activo 2 JL (default UBER)",   shortName: "Activo 2 JL",    desc: "Stock individual configurable (slot 2)", cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
   // USD - Refugio
@@ -322,6 +322,47 @@ function compareToBenchmark(portRet, benchRet) {
 // ============================================================
 // Computa σ (anualizada) y matriz de correlación de una ventana de retornos
 // mensuales. Robusto a activos sintéticos con σ=0 (devuelve correlación 0 con ellos).
+// Encuentra la ventana de meses donde TODOS los activos con peso > eps tienen
+// data (no null, no NaN). Devuelve también los activos que limitan el inicio.
+function computeBacktestWindow(monthlyReturns, weights, eps = 1e-6) {
+  if (!monthlyReturns || monthlyReturns.length === 0) {
+    return { startMonth: 0, endMonth: -1, nMonths: 0, limitingIndices: [] };
+  }
+  const activeIndices = weights
+    .map((w, i) => (w > eps ? i : -1))
+    .filter((i) => i >= 0);
+  const T = monthlyReturns.length;
+  const isValid = (t, i) => {
+    const v = monthlyReturns[t][i];
+    return v !== null && v !== undefined && !Number.isNaN(v);
+  };
+  let startMonth = -1;
+  for (let t = 0; t < T; t++) {
+    if (activeIndices.every((i) => isValid(t, i))) {
+      startMonth = t;
+      break;
+    }
+  }
+  if (startMonth < 0) {
+    return { startMonth: 0, endMonth: -1, nMonths: 0, limitingIndices: activeIndices };
+  }
+  let endMonth = T - 1;
+  for (let t = T - 1; t >= startMonth; t--) {
+    if (activeIndices.every((i) => isValid(t, i))) {
+      endMonth = t;
+      break;
+    }
+  }
+  // Activos que limitan el inicio: tenían NaN justo antes del startMonth
+  const limitingIndices = [];
+  if (startMonth > 0) {
+    for (const i of activeIndices) {
+      if (!isValid(startMonth - 1, i)) limitingIndices.push(i);
+    }
+  }
+  return { startMonth, endMonth, nMonths: endMonth - startMonth + 1, limitingIndices };
+}
+
 function windowSigmaCorr(monthlyReturns, fromIdx, toIdx) {
   const n = monthlyReturns[0].length;
   const k = toIdx - fromIdx;
@@ -1174,7 +1215,7 @@ ASSET_KEYS = [
 ASSET_NAMES = {
     "cspx":   "ETF S&P 500",
     "cndx":   "ETF Nasdaq 100",
-    "iwda":   "ETF MSCI World",
+    "iwda":   "ETF Developed ex USA",
     "msft":   "Stock Growth",
     "uber":   "Stock Value",
     "igln":   "ETF Gold",
@@ -1256,7 +1297,7 @@ CASH_SYNTH_KEYS = {"ibsav", "cdusd", "pensov", "pfpen", "savpen"}
 REAL_TICKERS = [
     ("cspx", "CSPX.L",  "IVV"),
     ("cndx", "CNDX.L",  "QQQ"),
-    ("iwda", "EXUS.L",  "URTH"),     # Xtrackers MSCI World ex-USA UCITS ETF Acc (ex USA)
+    ("iwda", "EFA",     "VEA"),       # iShares MSCI EAFE (inception 2001, 24y). Fallback VEA (FTSE Dev ex US, 2007)
     ("msft", GROWTH_TICKER, None),
     ("uber", VALUE_TICKER,  None),
     ("igln", "IGLN.L",  "GLD"),
@@ -1390,10 +1431,14 @@ def _build_monthly_returns(prices_df):
     """Resamplea precios diarios a fin de mes y devuelve log-returns mensuales.
 
     Output: DataFrame (n_months x n_activos_descargados) con indice = fechas YYYY-MM-DD
-    del ultimo dia habil de cada mes.
+    del ultimo dia habil de cada mes. PUEDE TENER NaN donde un activo no tenia data
+    en ese mes (porque el ticker era mas joven que el inicio del periodo).
     """
     monthly_prices = prices_df.resample("ME").last()
-    monthly_log_rets = np.log(monthly_prices / monthly_prices.shift(1)).dropna()
+    # NO hacemos dropna global: cada cell mantiene NaN si el activo no tenia data ese mes
+    monthly_log_rets = np.log(monthly_prices / monthly_prices.shift(1))
+    # Eliminar solo la primera fila (que siempre es NaN por el shift)
+    monthly_log_rets = monthly_log_rets.iloc[1:]
     return monthly_log_rets
 
 
@@ -1617,17 +1662,42 @@ def main():
             ln = ticker_meta[key]["longName"]
             print(f"OK  {ln[:50]}")
 
-    df = pd.DataFrame(data).dropna()
+    # =========================================================
+    # CAMBIO DE FILOSOFIA: ya NO alineamos a la ventana comun.
+    # Cada activo se computa sobre SUS PROPIAS fechas (hasta 10 anios).
+    # Correlaciones y betas se calculan pair-wise (interseccion del par).
+    # =========================================================
+
+    # df: outer-join, NaN donde un ticker no tiene data en esa fecha
+    df = pd.DataFrame(data)
     if df.empty:
-        print("ERROR: no se pudo alinear ningun ticker.")
+        print("ERROR: no se pudo descargar ningun ticker.")
         sys.exit(1)
-    print(f"\\nAlineados: {len(df)} dias, {df.index.min().date()} -> {df.index.max().date()}")
 
-    # ---- 2. Daily log returns + estadisticos ----
-    log_rets = np.log(df / df.shift(1)).dropna()
-    sp_r = log_rets["cspx"]
-    ep_r = log_rets["epu"]
+    # Log returns: NaN donde el ticker no tenia precio ese dia
+    log_rets = np.log(df / df.shift(1))
 
+    # Per-ticker years available
+    years_available = {}
+    for k in df.columns:
+        n_days = int(log_rets[k].dropna().shape[0])
+        years_available[k] = round(n_days / 252.0, 2)
+
+    print(f"\\n{'='*62}")
+    print("ESTADISTICOS PER-TICKER (cada uno sobre su propia ventana):")
+    print(f"{'='*62}")
+    print(f"  {'KEY':<8}{'TICKER':<12}{'DESDE':<13}{'AÑOS':>7}{'  DIAS':>10}")
+    for k in df.columns:
+        first = data[k].index[0].date()
+        ya    = years_available[k]
+        nd    = log_rets[k].dropna().shape[0]
+        mark  = "  ✓" if ya >= 9.5 else ("  ~" if ya >= 5 else "  ⚠")
+        print(f"  {k:<8}{used[k]:<12}{str(first):<13}{ya:>5.1f}y{nd:>10}{mark}")
+
+    # Stats per-ticker: _compute_stats ya hace dropna() por columna internamente
+    # y la beta usa pd.concat(...).dropna() para pair-wise.
+    sp_r = log_rets["cspx"].dropna() if "cspx" in log_rets else pd.Series(dtype=float)
+    ep_r = log_rets["epu"].dropna()  if "epu"  in log_rets else pd.Series(dtype=float)
     stats = {k: _compute_stats(log_rets, k, sp_r, ep_r) for k in df.columns}
 
     def metric(name):
@@ -1642,20 +1712,22 @@ def main():
     for k, v in SYNTHETIC_SIGMAS.items():
         sigma_all[k] = v
 
-    # ---- 3. Rolling 1y minimo (peor ventana de 252 dias anualizada) ----
+    # ---- Rolling 1y minimo per-ticker (en su propia ventana) ----
     hist_1y_min = {}
     for k in df.columns:
         v = _rolling_1y_min(log_rets, k)
         hist_1y_min[k] = v if v is not None else float("nan")
-    # cash/sinteticos: usan su histRet fijo (no hay drawdown teorico)
     for k in CASH_SYNTH_KEYS:
         hist_1y_min[k] = STATIC_HISTRET.get(k, 0.0)
-    # asegurar todas las claves
     hist_1y_min_full = {k: float(hist_1y_min.get(k, 0.0)) for k in ASSET_KEYS}
 
-    # ---- 4. Correlacion 16x16 ----
+    # ---- Correlacion pair-wise (pandas .corr() excluye NaN por par) ----
     present = [k for k in REAL_KEYS if k in df.columns]
-    corr_full = _build_full_correlation(log_rets[present].corr(), present)
+    # min_periods=60: al menos 60 dias en comun para considerar la correlacion valida
+    corr_pairwise = log_rets[present].corr(min_periods=60)
+    # Reemplazar NaN (pares sin overlap suficiente) con 0
+    corr_pairwise = corr_pairwise.fillna(0.0)
+    corr_full = _build_full_correlation(corr_pairwise, present)
     # Override correlaciones de sinteticos riesgosos (pensov tiene correlaciones
     # con bonos USA, EPU, etc. que el calculo no puede deducir sin data).
     for k, corrs in SYNTHETIC_CORRELATIONS.items():
@@ -1672,16 +1744,27 @@ def main():
     # ---- 5. Retornos mensuales (para backtest historico real en la calculadora) ----
     monthly_log_rets = _build_monthly_returns(df)
     monthly_dates = [d.strftime("%Y-%m-%d") for d in monthly_log_rets.index]
-    # Construir matriz N_months x 16 (cash/sinteticos = log(1+rate)/12 constante)
+    # Matriz N_months x 16. Cells donde un activo no tenia data ese mes = None (null en JSON).
+    # El backtest en la calculadora determina la ventana valida segun los activos seleccionados.
     n_months = len(monthly_log_rets)
-    monthly_full = np.zeros((n_months, len(ASSET_KEYS)), dtype=float)
+    monthly_full = [[None] * len(ASSET_KEYS) for _ in range(n_months)]
     for j, k in enumerate(ASSET_KEYS):
         if k in monthly_log_rets.columns:
-            monthly_full[:, j] = monthly_log_rets[k].values
+            col = monthly_log_rets[k].values
+            for i in range(n_months):
+                v = col[i]
+                # NaN → None (para que JSON.parse lo lea como null en JS)
+                monthly_full[i][j] = None if (isinstance(v, float) and np.isnan(v)) else float(v)
         else:
-            # Cash/sinteticos: compounder deterministico
+            # Cash/sinteticos: compounder deterministico (siempre presente, sin NaN)
             r = STATIC_HISTRET.get(k, 0.0)
-            monthly_full[:, j] = np.log(1 + r) / 12
+            cash_monthly_log = float(np.log(1 + r) / 12)
+            for i in range(n_months):
+                monthly_full[i][j] = cash_monthly_log
+
+    # Inception y last dates per-ticker (para diagnostico en la calculadora)
+    inception_dates = {k: str(ser.index[0].date()) for k, ser in data.items()}
+    last_dates      = {k: str(ser.index[-1].date()) for k, ser in data.items()}
 
     # ---- 6. Consenso de analistas + Damodaran ----
     print("\\nObteniendo consenso de analistas...")
@@ -1695,15 +1778,21 @@ def main():
         print(f"  {k:6s} mean={mean_str}  source={src}")
 
     # ---- 7. Armar JSON ----
-    years = (df.index.max() - df.index.min()).days / 365.25
+    # "years" ahora es el rango total (oldest start → most recent end)
+    earliest_start = min(ser.index[0] for ser in data.values())
+    latest_end     = max(ser.index[-1] for ser in data.values())
+    years = (latest_end - earliest_start).days / 365.25
     out = {
         "meta": {
-            "schema_version": "2026-05-24",
-            "years": round(years, 2),
+            "schema_version": "2026-05-24-per-ticker",
+            "years": round(years, 2),       # rango total (sin alineacion)
             "days": int(len(log_rets)),
-            "date_from": str(df.index.min().date()),
-            "date_to": str(df.index.max().date()),
-            "tickers_used": used,
+            "date_from": str(earliest_start.date()),
+            "date_to":   str(latest_end.date()),
+            "tickers_used":      used,
+            "inception_dates":   inception_dates,   # per-ticker primer dia disponible
+            "last_dates":        last_dates,        # per-ticker ultimo dia disponible
+            "years_available":   years_available,   # per-ticker años de history reales
             "n_months": int(n_months),
             "month_from": monthly_dates[0] if monthly_dates else None,
             "month_to":   monthly_dates[-1] if monthly_dates else None,
@@ -1715,7 +1804,7 @@ def main():
         "damodaran":   {k: float(DAMODARAN_EXPECTED_RETURNS.get(k, 0.0)) for k in ASSET_KEYS},
         "analyst_consensus": analyst_consensus,   # {key: {low, mean, high, source, ...}}
         "ticker_meta": ticker_meta,               # {key: {longName, summary, sector, industry, currency}}
-        "monthly_returns": [list(map(float, row)) for row in monthly_full],
+        "monthly_returns": monthly_full,          # [n_months][16], puede tener nulls
         "monthly_dates":   monthly_dates,
         "beta_sp":     metric("beta_sp"),
         "beta_epu":    metric("beta_epu"),
@@ -1887,6 +1976,7 @@ export default function Calculadora() {
       asset.hist1yMin     = undefined;
       asset.consensusSource = undefined;
       asset.tickerMeta    = undefined;
+      asset.yearsAvailable = undefined;
       // Apply marketData (real yfinance values) — overrides fallbacks
       if (marketData) {
         // σ: si el JSON dice 0 para un activo no-cash, preservar el hardcoded
@@ -1909,6 +1999,10 @@ export default function Calculadora() {
         // Ticker metadata (longName + summary del yfinance)
         if (marketData.ticker_meta?.[baseKey]) {
           asset.tickerMeta = marketData.ticker_meta[baseKey];
+        }
+        // Years de history disponibles para este activo
+        if (typeof marketData.meta?.years_available?.[baseKey] === "number") {
+          asset.yearsAvailable = marketData.meta.years_available[baseKey];
         }
       }
       // Override slots editables (idx 3, 4): renombrados a "Activo 1 JL" / "Activo 2 JL"
@@ -2108,12 +2202,31 @@ export default function Calculadora() {
       alert("El JSON cargado no tiene monthly_returns / monthly_dates.\n\nRegenerá el JSON con la versión actualizada del download_data.py (incluye matriz mensual N×16).");
       return;
     }
+    // Recortar a la ventana donde TODOS los activos con peso > 0 tienen data.
+    // Si un activo joven (ej. EXUS.L inception 2024) está en el portafolio,
+    // limita la ventana; si su peso es 0, no influye.
+    const win = computeBacktestWindow(marketData.monthly_returns, weights);
+    if (win.nMonths <= 24 + 2) {
+      const limitingNames = win.limitingIndices.map(i => effectiveAssets[i]?.id || `idx${i}`);
+      const inceptions = win.limitingIndices.map(i => {
+        const key = ASSETS[i]?.id;
+        return marketData.meta?.inception_dates?.[key] || "?";
+      });
+      const detail = limitingNames.length > 0
+        ? `\n\nActivos que limitan: ${limitingNames.join(", ")} (inception ${inceptions.join(", ")}).\n\nOpciones: reducí su peso a 0 en la cartera, o regenerá el JSON con tickers más antiguos.`
+        : "";
+      alert(`Ventana efectiva del portafolio actual: ${win.nMonths} meses (necesitamos al menos ${24+12} para un backtest decente).${detail}`);
+      return;
+    }
+    const trimmedReturns = marketData.monthly_returns.slice(win.startMonth, win.endMonth + 1);
+    const trimmedDates   = marketData.monthly_dates.slice(win.startMonth, win.endMonth + 1);
+
     setBacktestRunning(true);
     setTimeout(() => {
       const spIdx = marketData.asset_keys?.indexOf("cspx") ?? 0;
       const result = runWalkForwardBacktest({
-        monthlyReturns: marketData.monthly_returns,
-        monthlyDates: marketData.monthly_dates,
+        monthlyReturns: trimmedReturns,
+        monthlyDates: trimmedDates,
         customReturns: effectiveReturns,
         effectiveAssets: effectiveAssets,
         baseWeights: weights,
@@ -2488,6 +2601,7 @@ export default function Calculadora() {
                   if (!marketData.damodaran)         missing.push("damodaran");
                   if (!marketData.hist_1y_min)       missing.push("hist_1y_min");
                   if (!marketData.monthly_returns)   missing.push("monthly_returns");
+                  if (!marketData.meta?.years_available) missing.push("years_available");
                   if (missing.length === 0) return null;
                   return (
                     <>
@@ -4332,14 +4446,46 @@ export default function Calculadora() {
             </div>
           )}
 
-          {marketData?.monthly_returns && !backtestResult && !backtestRunning && (
-            <div style={styles.placeholder}>
-              {marketData.monthly_returns.length} meses disponibles · {marketData.monthly_returns.length - 24} meses efectivos de backtest post burn-in.
-              <br/><span style={{fontSize: 11, opacity: 0.7}}>
-                Tip: prueba la misma cartera con 1m / 3m / 6m / 1y y compara CAGR y drawdown.
-              </span>
-            </div>
-          )}
+          {marketData?.monthly_returns && !backtestResult && !backtestRunning && (() => {
+            // Ventana efectiva basada en los activos con peso > 0 del portafolio actual
+            const win = computeBacktestWindow(marketData.monthly_returns, weights);
+            const totalMonths = marketData.monthly_returns.length;
+            const effective = Math.max(0, win.nMonths - 24);
+            const tooShort = effective < 12;
+            const inceptions = marketData.meta?.inception_dates || {};
+            const limitingNames = win.limitingIndices.map(i => {
+              const key = ASSETS[i]?.id || `idx${i}`;
+              const tk = marketData.meta?.tickers_used?.[key] || key;
+              const inc = inceptions[key] || "?";
+              return `${tk} (${inc})`;
+            });
+            return (
+              <div style={{ ...styles.placeholder, color: tooShort ? "var(--negative)" : undefined }}>
+                {tooShort ? "⚠ " : ""}{totalMonths} meses totales en el JSON · ventana efectiva del portafolio actual: <strong>{win.nMonths} meses</strong> ({effective} efectivos post burn-in 24m).
+                {tooShort && (
+                  <>
+                    <br/><span style={{fontSize: 11.5, opacity: 0.95}}>
+                      Con {effective} {effective === 1 ? "mes" : "meses"} efectivos no se puede comparar frecuencias de rebalanceo de forma significativa.
+                    </span>
+                    {limitingNames.length > 0 && (
+                      <>
+                        <br/><span style={{fontSize: 11, opacity: 0.85, color: "var(--ink-muted)"}}>
+                          <strong>Activos limitantes en tu cartera:</strong> {limitingNames.join(", ")}. Reducí su peso a 0% o reemplazá esos tickers por otros con más historia.
+                        </span>
+                      </>
+                    )}
+                  </>
+                )}
+                {!tooShort && (
+                  <>
+                    <br/><span style={{fontSize: 11, opacity: 0.7}}>
+                      Tip: prueba la misma cartera con 1m / 3m / 6m / 1y y compara CAGR y drawdown.
+                    </span>
+                  </>
+                )}
+              </div>
+            );
+          })()}
 
           {backtestResult && (
             <>
@@ -4514,6 +4660,12 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
                   tope {fmtPct(capW, 0)}
                 </span>
               )}
+              {typeof asset.yearsAvailable === "number" && (
+                <span style={asset.yearsAvailable >= 9.5 ? styles.histBadgeFull : styles.histBadgePartial}
+                      title={`${asset.yearsAvailable}y de history real en yfinance · σ y métricas computadas sobre esta ventana`}>
+                  hist {asset.yearsAvailable.toFixed(1)}y
+                </span>
+              )}
             </>
           ) : (
             <>
@@ -4544,6 +4696,12 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
                         ? `Tope activo: el optimizador no puede asignar más de ${fmtPct(capW,0)} a este activo (σ ${fmtPct(asset.vol,1)})`
                         : `Tope sugerido ${fmtPct(capW,0)} (no aplicado · activa "Topes por volatilidad")`}>
                   tope {fmtPct(capW, 0)}
+                </span>
+              )}
+              {typeof asset.yearsAvailable === "number" && (
+                <span style={asset.yearsAvailable >= 9.5 ? styles.histBadgeFull : styles.histBadgePartial}
+                      title={`${asset.yearsAvailable}y de history real en yfinance · σ y métricas computadas sobre esta ventana`}>
+                  hist {asset.yearsAvailable.toFixed(1)}y
                 </span>
               )}
             </>
@@ -6488,6 +6646,34 @@ const styles = {
     whiteSpace: "nowrap",
     fontVariantNumeric: "tabular-nums",
     opacity: 0.65,
+  },
+  histBadgeFull: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    fontWeight: 600,
+    letterSpacing: "0.04em",
+    padding: "2px 7px",
+    border: "1px solid var(--positive)",
+    background: "rgba(74, 124, 89, 0.10)",
+    color: "var(--positive)",
+    borderRadius: 2,
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
+  },
+  histBadgePartial: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    fontWeight: 600,
+    letterSpacing: "0.04em",
+    padding: "2px 7px",
+    border: "1px solid var(--gold)",
+    background: "rgba(184, 146, 58, 0.10)",
+    color: "var(--gold)",
+    borderRadius: 2,
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
   },
   retSliderRow: {
     display: "flex",

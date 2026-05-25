@@ -1747,8 +1747,12 @@ export default function Calculadora() {
   }, [enforceMinFloors, enforceMaxCaps, pensovSigma]);
 
   const runBacktestSim = useCallback(() => {
-    if (!marketData?.monthly_returns || !marketData?.monthly_dates) {
-      alert("Backtest walk-forward requiere monthly_returns en el JSON cargado.\n\nCarga el yfinance_results.json generado por el download_data.py actualizado.");
+    if (!marketData) {
+      alert("No hay JSON cargado.\n\nUsá el botón '📂 Cargar JSON' arriba y subí un yfinance_results.json generado por download_data.py.");
+      return;
+    }
+    if (!marketData.monthly_returns || !marketData.monthly_dates) {
+      alert("El JSON cargado no tiene monthly_returns / monthly_dates.\n\nRegenerá el JSON con la versión actualizada del download_data.py (incluye matriz mensual N×16).");
       return;
     }
     setBacktestRunning(true);
@@ -2120,6 +2124,36 @@ export default function Calculadora() {
                     {" "}· <strong>{marketData.meta.years} años</strong> ({marketData.meta.date_from} → {marketData.meta.date_to}, {marketData.meta.days?.toLocaleString?.()} días)
                   </>
                 )}
+                {(() => {
+                  // Diagnóstico de campos faltantes (JSON viejo): listar qué falta
+                  const missing = [];
+                  if (!marketData.ticker_meta)      missing.push("ticker_meta");
+                  if (!marketData.analyst_consensus) missing.push("analyst_consensus");
+                  if (!marketData.damodaran)         missing.push("damodaran");
+                  if (!marketData.hist_1y_min)       missing.push("hist_1y_min");
+                  if (!marketData.monthly_returns)   missing.push("monthly_returns");
+                  if (missing.length === 0) return null;
+                  return (
+                    <>
+                      {" "}
+                      <span style={{
+                        display: "inline-block",
+                        marginLeft: 6,
+                        padding: "2px 7px",
+                        background: "rgba(184, 146, 58, 0.18)",
+                        border: "1px solid var(--gold)",
+                        color: "var(--gold)",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 10.5,
+                        fontWeight: 600,
+                        borderRadius: 2,
+                        letterSpacing: "0.03em",
+                      }}>
+                        ⚠ JSON sin: {missing.join(", ")} · regenerá con download_data.py actualizado
+                      </span>
+                    </>
+                  );
+                })()}
               </>
             ) : (
               <>Usando valores embebidos del JSON inicial. Arrastra un <code style={styles.modalCode}>yfinance_results.json</code> aquí o usa "Cargar JSON".</>
@@ -3924,11 +3958,20 @@ export default function Calculadora() {
             </div>
           </div>
 
-          {!marketData?.monthly_returns && (
-            <div style={{ ...styles.placeholder, color: "var(--negative)" }}>
-              ⚠ Se necesita un JSON con <code>monthly_returns</code> y <code>monthly_dates</code> cargado.
+          {!marketData && (
+            <div style={{ ...styles.placeholder, color: "var(--gold)" }}>
+              ⚠ Sin JSON de datos de mercado cargado.
               <br/><span style={{fontSize: 11, opacity: 0.85}}>
-                Re-genera el JSON con la versión nueva del <code>download_data.py</code> (incluye matriz mensual 84×16).
+                Subí un <code>yfinance_results.json</code> arriba (botón <strong>📂 Cargar JSON</strong>). El backtest walk-forward necesita la matriz mensual de retornos reales para correr.
+              </span>
+            </div>
+          )}
+
+          {marketData && !marketData.monthly_returns && (
+            <div style={{ ...styles.placeholder, color: "var(--negative)" }}>
+              ⚠ Tu JSON está cargado pero le falta <code>monthly_returns</code> y <code>monthly_dates</code>.
+              <br/><span style={{fontSize: 11, opacity: 0.85}}>
+                Regenerá el JSON con la versión actualizada del <code>download_data.py</code> (incluye matriz mensual N×16 para el backtest histórico real).
               </span>
             </div>
           )}

@@ -1116,22 +1116,36 @@ function normalize(weights) {
 // {GROWTH} y {VALUE} se reemplazan en runtime con los tickers Value/Growth elegidos
 // ============================================================
 const DOWNLOAD_PY_TEMPLATE = `"""
-download_data.py — descarga la data de yfinance del portafolio completo.
+download_data.py — VERSION 2026-05-24 (con ticker_meta + monthly_returns)
 
-Descarga los 11 tickers reales (10 ETFs/commodities + 2 stocks editables Growth/Value),
-calcula sigma, CAGR, beta vs S&P, beta vs EPU, VaR/ES historicos al 95% y 99%, y la
-matriz de correlaciones 16x16 (con los 5 cash/sinteticos hardcodeados con sigma=0 y
-sus respectivos histRet fijos).
+Schema JSON que produce:
+  meta, sigma, histRet, hist_1y_min, damodaran, analyst_consensus,
+  ticker_meta, monthly_returns, monthly_dates, beta_sp, beta_epu,
+  var_95, var_99, es_95, es_99, correlation, asset_keys
 
-Salidas generadas en el mismo folder:
-  - yfinance_results.json       (para cargar en la calculadora web)
-  - yfinance_summary.csv        (1 fila por activo, abrir en Excel)
-  - yfinance_correlation.csv    (matriz 16x16 con labels)
-  - yfinance_prices.csv         (precios diarios crudos)
+Si tu calculadora muestra el badge dorado "⚠ JSON sin: ticker_meta, ...",
+significa que NO estás corriendo ESTE archivo. Para verificar:
+  grep -c "_fetch_ticker_meta" download_data.py
+Debería decir al menos 2. Si dice 0, es una version vieja — reemplazá el archivo.
+
+Salidas en el mismo folder:
+  - yfinance_results.json       <- cargalo en la calculadora web
+  - yfinance_summary.csv        <- metricas por activo (Excel)
+  - yfinance_correlation.csv    <- matriz 16x16 (Excel)
+  - yfinance_prices.csv         <- precios diarios crudos
+  - yfinance_monthly_returns.csv  <- retornos mensuales (alimenta el backtest historico real)
 
 Uso:
   pip install yfinance pandas numpy
   python download_data.py
+
+EDITAR UNA VEZ AL ANIO (cuando Damodaran publique en enero):
+  - bloque DAMODARAN_EXPECTED_RETURNS (linea ~70)
+  - opcional: BTC_CONSENSUS_FALLBACK si quieres mover el rango de Bitcoin
+
+Fuentes para actualizar Damodaran:
+  https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/wacc.htm
+  https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ctryprem.html
 """
 import json
 import sys
@@ -1142,13 +1156,13 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # ============================================================
-# EDITA AQUI los tickers Value y Growth (como aparecen en Yahoo Finance)
+# EDITA AQUI los tickers Value y Growth (como en Yahoo Finance)
 # ============================================================
-GROWTH_TICKER = "{GROWTH}"
-VALUE_TICKER  = "{VALUE}"
+GROWTH_TICKER = "MSFT"
+VALUE_TICKER  = "UBER"
 # ============================================================
 
 # Orden CANONICO de los 16 activos (debe coincidir con la calculadora React)
@@ -1157,7 +1171,6 @@ ASSET_KEYS = [
     "ibsav", "cdusd", "epu", "pensov", "pfpen", "savpen",
 ]
 
-# Nombres descriptivos para el CSV (mas legibles que los keys)
 ASSET_NAMES = {
     "cspx":   "ETF S&P 500",
     "cndx":   "ETF Nasdaq 100",
@@ -1177,23 +1190,85 @@ ASSET_NAMES = {
     "savpen": "Cuenta Ahorros PEN",
 }
 
-# Tickers reales (con fallback). msft/uber son slots editables.
+# ============================================================
+# DAMODARAN — EXPECTED RETURNS POR ACTIVO (actualizar cada enero)
+# ============================================================
+# Fuente: Damodaran online — Total Cost of Equity por industria, USA y emergentes.
+#   https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/wacc.htm
+#
+# Mapping (basado en enero 2025, ajustar segun nueva publicacion):
+#   cspx  -> Total Market US                         ~8.5%
+#   cndx  -> Software/Tech (Nasdaq 100 weighted)     ~9.5%
+#   iwda  -> Global Equity Average                   ~8.0%
+#   msft  -> Software (System & Application)         ~9.0%
+#   uber  -> Transportation (Trucking + Software)    ~10.0%
+#   igln  -> Commodity (Gold proxy)                  ~5.0%
+#   vtc   -> Corporate Bond Cost of Debt             ~5.5%
+#   bil   -> 3M T-Bill yield (matches Rf actual)     ~4.5%
+#   ief   -> 10Y T-Bond yield (matches Rf actual)    ~4.3%
+#   btc   -> No-coverage (Damodaran personalmente lo evita) — alto premium ~12%
+#   epu   -> Emerging Equity con country risk Peru   ~12.0%
+#   pensov -> Bono Soberano Peru                     ~6.0%
+#   cash/PF -> mismo que su retorno fijo (sin premium)
+DAMODARAN_EXPECTED_RETURNS = {
+    "cspx":   0.085,
+    "cndx":   0.095,
+    "iwda":   0.080,
+    "msft":   0.090,
+    "uber":   0.100,
+    "igln":   0.050,
+    "vtc":    0.055,
+    "bil":    0.045,
+    "ief":    0.043,
+    "btc":    0.120,
+    "ibsav":  0.015,
+    "cdusd":  0.020,
+    "epu":    0.120,
+    "pensov": 0.060,
+    "pfpen":  0.045,
+    "savpen": 0.035,
+}
+
+# ============================================================
+# FALLBACKS PARA CONSENSO DE ANALISTAS
+# ============================================================
+# yfinance solo expone analyst_price_targets para acciones individuales (msft, uber).
+# Para ETFs y BTC no hay datos directos — usamos heuristica.
+#
+# Multiplicadores aplicados a Damodaran para construir low/mean/high cuando
+# no hay datos reales de analistas:
+EQUITY_ETF_BAND = (0.80, 1.00, 1.20)   # ±20% sobre Damodaran neutral
+BOND_ETF_BAND_BPS = 0.005               # ±50 bps sobre Damodaran neutral
+
+# Para BTC (sin coverage de analistas), rango ancho hardcodeado:
+BTC_CONSENSUS_FALLBACK = {"low": -0.30, "mean": 0.25, "high": 0.80}
+
+# Clasificacion para aplicar el fallback correcto a cada activo:
+EQUITY_ETF_KEYS = {"cspx", "cndx", "iwda", "igln", "epu"}
+BOND_ETF_KEYS   = {"vtc", "bil", "ief"}
+STOCK_KEYS      = {"msft", "uber"}      # analyst_price_targets directo
+CRYPTO_KEYS     = {"btc"}               # rango hardcoded
+CASH_SYNTH_KEYS = {"ibsav", "cdusd", "pensov", "pfpen", "savpen"}
+
+# ============================================================
+# REAL TICKERS — los 11 que se descargan
+# ============================================================
 REAL_TICKERS = [
     ("cspx", "CSPX.L",  "IVV"),
     ("cndx", "CNDX.L",  "QQQ"),
-    ("iwda", "EXUS.L",  "URTH"),
+    ("iwda", "EXUS.L",  "URTH"),     # Xtrackers MSCI World ex-USA UCITS ETF Acc (ex USA)
     ("msft", GROWTH_TICKER, None),
     ("uber", VALUE_TICKER,  None),
     ("igln", "IGLN.L",  "GLD"),
-    ("vtc",  "LQDA.L",  "LQD"),
-    ("bil",  "ZPR1.L",  "IB01.L"),
-    ("ief",  "CBU7.L",  "SXXB.L"),
+    ("vtc",  "LQDA.L",  "LQD"),      # iShares USD Corp Bond UCITS ETF Acc (era VTC)
+    ("bil",  "ZPR1.L",  "IB01.L"),   # SPDR Treasury 0-1Y UCITS ETF Acc; fallback IB01 (era BIL)
+    ("ief",  "CBU7.L",  "SXXB.L"),   # iShares $ Treasury 7-10Y UCITS ETF Acc; fallback SXXB (era IEF)
     ("btc",  "BTC-USD", None),
     ("epu",  "EPU",     None),
 ]
 REAL_KEYS = [t[0] for t in REAL_TICKERS]
 
-# histRet hardcoded de los 5 cash/sinteticos (no se descargan, sigma=0)
+# histRet hardcoded de los 5 cash/sinteticos
 STATIC_HISTRET = {
     "ibsav":  0.015,
     "cdusd":  0.020,
@@ -1202,12 +1277,41 @@ STATIC_HISTRET = {
     "savpen": 0.035,
 }
 
+# ============================================================
+# SIGMA y CORRELACIONES SINTETICAS para activos sin ticker publico
+# pero CON riesgo real (no son cash). Solo aplica a pensov por ahora.
+# Estos valores se inyectan al output sobrescribiendo el 0.0 default
+# de la rutina de calculo (que no puede medirlos por falta de data).
+# Valores razonables: pensov σ≈7% similar a bonos soberanos EM
+# duracion intermedia. Correlaciones derivadas de pares logicos
+# (mucha con IEF y VTC, moderada con EPU, baja con equities).
+# ============================================================
+SYNTHETIC_SIGMAS = {
+    "pensov": 0.07,
+}
+SYNTHETIC_CORRELATIONS = {
+    "pensov": {
+        "cspx": 0.15, "cndx": 0.10, "iwda": 0.18,
+        "msft": 0.10, "uber": 0.10,
+        "igln": 0.15,
+        "vtc": 0.55, "bil": 0.20, "ief": 0.65,
+        "btc": 0.05,
+        "ibsav": 0.05, "cdusd": 0.05,
+        "epu": 0.35,
+        "pfpen": 0.15, "savpen": 0.15,
+    },
+}
+
 OUTPUT_JSON         = "yfinance_results.json"
 OUTPUT_SUMMARY_CSV  = "yfinance_summary.csv"
 OUTPUT_CORR_CSV     = "yfinance_correlation.csv"
 OUTPUT_PRICES_CSV   = "yfinance_prices.csv"
+OUTPUT_MONTHLY_CSV  = "yfinance_monthly_returns.csv"
 
 
+# ============================================================
+# UTILIDADES
+# ============================================================
 def _extract_close(df):
     """yfinance >=0.2.40 devuelve MultiIndex en columnas incluso con un solo ticker."""
     if isinstance(df.columns, pd.MultiIndex):
@@ -1268,6 +1372,31 @@ def _compute_stats(log_rets, key, sp_r, ep_r):
                 var_95=var_95, var_99=var_99, es_95=es_95, es_99=es_99)
 
 
+def _rolling_1y_min(log_rets, key):
+    """Peor retorno acumulado de cualquier ventana de 252 dias, en terminos anualizados.
+
+    Rolling sum de 252 daily log returns = log(P_t / P_{t-252}) = retorno log de 1 anio.
+    Convertimos a retorno simple anualizado con exp(.) - 1.
+    """
+    r = log_rets[key].dropna()
+    if len(r) < 252:
+        return None
+    rolling_log_1y = r.rolling(252).sum().dropna()
+    rolling_ann = np.exp(rolling_log_1y) - 1
+    return float(rolling_ann.min())
+
+
+def _build_monthly_returns(prices_df):
+    """Resamplea precios diarios a fin de mes y devuelve log-returns mensuales.
+
+    Output: DataFrame (n_months x n_activos_descargados) con indice = fechas YYYY-MM-DD
+    del ultimo dia habil de cada mes.
+    """
+    monthly_prices = prices_df.resample("ME").last()
+    monthly_log_rets = np.log(monthly_prices / monthly_prices.shift(1)).dropna()
+    return monthly_log_rets
+
+
 def _build_full_correlation(corr_real_df, present_keys):
     n = len(ASSET_KEYS)
     M = [[0.0] * n for _ in range(n)]
@@ -1280,58 +1409,213 @@ def _build_full_correlation(corr_real_df, present_keys):
     return M
 
 
+# ============================================================
+# CONSENSO DE ANALISTAS (yfinance + fallbacks)
+# ============================================================
+def _fetch_ticker_meta(ticker_symbol):
+    """Lee nombre completo + descripcion del ticker via yfinance Ticker.info.
+    Devuelve dict con longName, summary, sector, industry, currency, quote_type.
+    Si falla (network, ticker no encontrado, etc), devuelve dict con strings vacios.
+    """
+    try:
+        info = yf.Ticker(ticker_symbol).info or {}
+        summary = (info.get("longBusinessSummary") or "").strip()
+        # Algunos ETFs no tienen longBusinessSummary pero si description
+        if not summary:
+            summary = (info.get("description") or info.get("fundDescription") or "").strip()
+        # Truncamos a 700 chars para no inflar el JSON con texto inutil
+        summary = summary[:700]
+        return {
+            "longName":   info.get("longName") or info.get("shortName") or ticker_symbol,
+            "summary":    summary,
+            "sector":     info.get("sector") or info.get("categoryName") or "",
+            "industry":   info.get("industry") or info.get("category") or info.get("fundFamily") or "",
+            "currency":   info.get("currency") or "",
+            "quote_type": info.get("quoteType") or "",
+        }
+    except Exception as e:
+        print(f"     [warn] sin metadata para {ticker_symbol}: {e}")
+        return {
+            "longName": ticker_symbol,
+            "summary": "",
+            "sector": "",
+            "industry": "",
+            "currency": "",
+            "quote_type": "",
+        }
+
+
+def _fetch_analyst_consensus_stock(ticker_symbol):
+    """Para acciones individuales (MSFT, UBER): convierte price targets a retorno
+    esperado a 12 meses. Devuelve None si yfinance no devuelve data utilizable.
+    """
+    try:
+        t = yf.Ticker(ticker_symbol)
+        # Intento 1: API nueva
+        try:
+            apt = t.analyst_price_targets  # propiedad, no metodo
+        except Exception:
+            apt = None
+
+        if isinstance(apt, dict) and apt:
+            current = apt.get("current") or apt.get("currentPrice")
+            low     = apt.get("low")
+            mean    = apt.get("mean")
+            high    = apt.get("high")
+        else:
+            # Fallback al info dict legacy
+            info = t.info or {}
+            current = info.get("currentPrice") or info.get("regularMarketPrice")
+            low     = info.get("targetLowPrice")
+            mean    = info.get("targetMeanPrice")
+            high    = info.get("targetHighPrice")
+
+        if not (current and low and mean and high):
+            return None
+        if current <= 0:
+            return None
+
+        return {
+            "low":  float(low  / current - 1),
+            "mean": float(mean / current - 1),
+            "high": float(high / current - 1),
+            "source": "yfinance_analyst_targets",
+            "current_price": float(current),
+        }
+    except Exception as e:
+        print(f"     [warn] analyst targets failed: {e}")
+        return None
+
+
+def _build_consensus_for_asset(key, stats_block, used_ticker):
+    """Devuelve {low, mean, high, source} para un activo, eligiendo la mejor fuente.
+
+    Reglas:
+      - stocks (msft, uber)     -> yfinance real, fallback a Damodaran ±20%
+      - ETFs equity             -> Damodaran ±20%
+      - ETFs bonos              -> Damodaran ±50bps
+      - BTC                     -> rango hardcoded fijo
+      - cash/sinteticos         -> mismo retorno fijo en los 3 campos
+    """
+    dmd = DAMODARAN_EXPECTED_RETURNS.get(key)
+
+    if key in STOCK_KEYS and used_ticker:
+        real = _fetch_analyst_consensus_stock(used_ticker)
+        if real is not None:
+            return real
+        # fallback
+        if dmd is None:
+            return None
+        return {"low": dmd * EQUITY_ETF_BAND[0], "mean": dmd, "high": dmd * EQUITY_ETF_BAND[2],
+                "source": "damodaran_fallback_pm20"}
+
+    if key in EQUITY_ETF_KEYS:
+        if dmd is None:
+            return None
+        return {"low": dmd * EQUITY_ETF_BAND[0], "mean": dmd, "high": dmd * EQUITY_ETF_BAND[2],
+                "source": "damodaran_pm20"}
+
+    if key in BOND_ETF_KEYS:
+        if dmd is None:
+            return None
+        return {"low": dmd - BOND_ETF_BAND_BPS, "mean": dmd, "high": dmd + BOND_ETF_BAND_BPS,
+                "source": "damodaran_pm50bps"}
+
+    if key in CRYPTO_KEYS:
+        b = BTC_CONSENSUS_FALLBACK
+        return {"low": b["low"], "mean": b["mean"], "high": b["high"],
+                "source": "hardcoded_btc_wide_band"}
+
+    if key in CASH_SYNTH_KEYS:
+        fixed = STATIC_HISTRET.get(key, dmd or 0.0)
+        return {"low": fixed, "mean": fixed, "high": fixed,
+                "source": "fixed_rate_no_uncertainty"}
+
+    return None
+
+
+# ============================================================
+# OUTPUTS (CSVs)
+# ============================================================
 def _write_summary_csv(out, used, path):
-    """Genera CSV con 1 fila por activo: key, name, ticker, sigma, histRet, betas, var, es."""
+    """1 fila por activo con todas las metricas + consenso + Damodaran + min 1y."""
     rows = []
     for k in ASSET_KEYS:
+        cons = out["analyst_consensus"].get(k) or {}
         rows.append({
-            "key":          k,
-            "name":         ASSET_NAMES.get(k, k),
-            "ticker_used":  used.get(k, "(estatico)"),
-            "sigma":        out["sigma"][k],
-            "histRet":      out["histRet"][k],
-            "beta_sp":      out["beta_sp"][k],
-            "beta_epu":     out["beta_epu"][k],
-            "var_95":       out["var_95"][k],
-            "var_99":       out["var_99"][k],
-            "es_95":        out["es_95"][k],
-            "es_99":        out["es_99"][k],
+            "key":               k,
+            "name":              ASSET_NAMES.get(k, k),
+            "ticker_used":       used.get(k, "(estatico)"),
+            "sigma":             out["sigma"][k],
+            "histRet":           out["histRet"][k],
+            "hist_1y_min":       out["hist_1y_min"].get(k),
+            "damodaran":         out["damodaran"][k],
+            "consensus_low":     cons.get("low"),
+            "consensus_mean":    cons.get("mean"),
+            "consensus_high":    cons.get("high"),
+            "consensus_source":  cons.get("source", "-"),
+            "beta_sp":           out["beta_sp"][k],
+            "beta_epu":          out["beta_epu"][k],
+            "var_95":            out["var_95"][k],
+            "var_99":            out["var_99"][k],
+            "es_95":             out["es_95"][k],
+            "es_99":             out["es_99"][k],
         })
     df = pd.DataFrame(rows)
-    # Formatear a 6 decimales para que Excel muestre numeros bonitos
-    for col in ["sigma", "histRet", "beta_sp", "beta_epu", "var_95", "var_99", "es_95", "es_99"]:
-        df[col] = df[col].round(6)
+    num_cols = ["sigma", "histRet", "hist_1y_min", "damodaran",
+                "consensus_low", "consensus_mean", "consensus_high",
+                "beta_sp", "beta_epu", "var_95", "var_99", "es_95", "es_99"]
+    for col in num_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce").round(6)
     df.to_csv(path, index=False)
 
 
 def _write_correlation_csv(corr_matrix, path):
-    """Matriz 16x16 con headers fila y columna usando los asset_keys."""
     df = pd.DataFrame(corr_matrix, index=ASSET_KEYS, columns=ASSET_KEYS)
     df = df.round(4)
     df.to_csv(path, index_label="asset")
 
 
 def _write_prices_csv(prices_df, path):
-    """Precios diarios crudos: 1 columna por activo descargado, indice = fecha."""
     out = prices_df.copy()
     out.index.name = "date"
     out = out.round(4)
     out.to_csv(path)
 
 
+def _write_monthly_csv(monthly_df, path):
+    out = monthly_df.copy()
+    out.index.name = "date"
+    out = out.round(6)
+    out.to_csv(path)
+
+
+# ============================================================
+# MAIN
+# ============================================================
 def main():
+    print("=" * 62)
+    print("download_data.py · VERSION 2026-05-24 (ticker_meta + monthly + Damodaran)")
     print("=" * 62)
     print(f"Descargando {len(REAL_TICKERS)} tickers reales desde yfinance")
     print(f"  Growth (msft slot) = {GROWTH_TICKER}")
     print(f"  Value  (uber slot) = {VALUE_TICKER}")
     print("=" * 62)
 
+    # ---- 1. Descargar precios ----
     data, used = {}, {}
+    ticker_meta = {}
     for key, primary, fallback in REAL_TICKERS:
         ser, tk = _download_one(key, primary, fallback)
         if ser is not None:
             data[key] = ser
             used[key] = tk
+            # Metadata (longName, summary, sector) — usa el ticker que efectivamente
+            # cargó (puede ser el primary o el fallback).
+            print(f"         metadata {tk:10s}", end=" ", flush=True)
+            ticker_meta[key] = _fetch_ticker_meta(tk)
+            ln = ticker_meta[key]["longName"]
+            print(f"OK  {ln[:50]}")
 
     df = pd.DataFrame(data).dropna()
     if df.empty:
@@ -1339,6 +1623,7 @@ def main():
         sys.exit(1)
     print(f"\\nAlineados: {len(df)} dias, {df.index.min().date()} -> {df.index.max().date()}")
 
+    # ---- 2. Daily log returns + estadisticos ----
     log_rets = np.log(df / df.shift(1)).dropna()
     sp_r = log_rets["cspx"]
     ep_r = log_rets["epu"]
@@ -1347,57 +1632,125 @@ def main():
 
     def metric(name):
         out = {k: stats[k][name] for k in df.columns}
-        for k in STATIC_HISTRET:
-            out[k] = 0.0
         return {k: float(out.get(k, 0.0)) for k in ASSET_KEYS}
 
     sigma_all   = metric("sigma")
     histRet_all = metric("histRet")
     for k, v in STATIC_HISTRET.items():
         histRet_all[k] = v
+    # Override σ de activos sinteticos riesgosos (pensov tiene σ≈7%, no 0)
+    for k, v in SYNTHETIC_SIGMAS.items():
+        sigma_all[k] = v
 
+    # ---- 3. Rolling 1y minimo (peor ventana de 252 dias anualizada) ----
+    hist_1y_min = {}
+    for k in df.columns:
+        v = _rolling_1y_min(log_rets, k)
+        hist_1y_min[k] = v if v is not None else float("nan")
+    # cash/sinteticos: usan su histRet fijo (no hay drawdown teorico)
+    for k in CASH_SYNTH_KEYS:
+        hist_1y_min[k] = STATIC_HISTRET.get(k, 0.0)
+    # asegurar todas las claves
+    hist_1y_min_full = {k: float(hist_1y_min.get(k, 0.0)) for k in ASSET_KEYS}
+
+    # ---- 4. Correlacion 16x16 ----
     present = [k for k in REAL_KEYS if k in df.columns]
     corr_full = _build_full_correlation(log_rets[present].corr(), present)
+    # Override correlaciones de sinteticos riesgosos (pensov tiene correlaciones
+    # con bonos USA, EPU, etc. que el calculo no puede deducir sin data).
+    for k, corrs in SYNTHETIC_CORRELATIONS.items():
+        if k not in ASSET_KEYS:
+            continue
+        i = ASSET_KEYS.index(k)
+        for other_k, c in corrs.items():
+            if other_k not in ASSET_KEYS:
+                continue
+            j = ASSET_KEYS.index(other_k)
+            corr_full[i][j] = c
+            corr_full[j][i] = c
 
+    # ---- 5. Retornos mensuales (para backtest historico real en la calculadora) ----
+    monthly_log_rets = _build_monthly_returns(df)
+    monthly_dates = [d.strftime("%Y-%m-%d") for d in monthly_log_rets.index]
+    # Construir matriz N_months x 16 (cash/sinteticos = log(1+rate)/12 constante)
+    n_months = len(monthly_log_rets)
+    monthly_full = np.zeros((n_months, len(ASSET_KEYS)), dtype=float)
+    for j, k in enumerate(ASSET_KEYS):
+        if k in monthly_log_rets.columns:
+            monthly_full[:, j] = monthly_log_rets[k].values
+        else:
+            # Cash/sinteticos: compounder deterministico
+            r = STATIC_HISTRET.get(k, 0.0)
+            monthly_full[:, j] = np.log(1 + r) / 12
+
+    # ---- 6. Consenso de analistas + Damodaran ----
+    print("\\nObteniendo consenso de analistas...")
+    analyst_consensus = {}
+    for k in ASSET_KEYS:
+        cons = _build_consensus_for_asset(k, stats.get(k), used.get(k))
+        analyst_consensus[k] = cons
+        src = cons.get("source", "-") if cons else "NONE"
+        mean = cons.get("mean") if cons else None
+        mean_str = f"{mean*100:>6.2f}%" if mean is not None else "  ---"
+        print(f"  {k:6s} mean={mean_str}  source={src}")
+
+    # ---- 7. Armar JSON ----
     years = (df.index.max() - df.index.min()).days / 365.25
     out = {
         "meta": {
+            "schema_version": "2026-05-24",
             "years": round(years, 2),
             "days": int(len(log_rets)),
             "date_from": str(df.index.min().date()),
             "date_to": str(df.index.max().date()),
             "tickers_used": used,
+            "n_months": int(n_months),
+            "month_from": monthly_dates[0] if monthly_dates else None,
+            "month_to":   monthly_dates[-1] if monthly_dates else None,
+            "damodaran_vintage": "edit DAMODARAN_EXPECTED_RETURNS dict in download_data.py",
         },
-        "sigma":    sigma_all,
-        "histRet":  histRet_all,
-        "beta_sp":  metric("beta_sp"),
-        "beta_epu": metric("beta_epu"),
-        "var_95":   metric("var_95"),
-        "var_99":   metric("var_99"),
-        "es_95":    metric("es_95"),
-        "es_99":    metric("es_99"),
+        "sigma":       sigma_all,
+        "histRet":     histRet_all,
+        "hist_1y_min": hist_1y_min_full,
+        "damodaran":   {k: float(DAMODARAN_EXPECTED_RETURNS.get(k, 0.0)) for k in ASSET_KEYS},
+        "analyst_consensus": analyst_consensus,   # {key: {low, mean, high, source, ...}}
+        "ticker_meta": ticker_meta,               # {key: {longName, summary, sector, industry, currency}}
+        "monthly_returns": [list(map(float, row)) for row in monthly_full],
+        "monthly_dates":   monthly_dates,
+        "beta_sp":     metric("beta_sp"),
+        "beta_epu":    metric("beta_epu"),
+        "var_95":      metric("var_95"),
+        "var_99":      metric("var_99"),
+        "es_95":       metric("es_95"),
+        "es_99":       metric("es_99"),
         "correlation": corr_full,
-        "asset_keys": ASSET_KEYS,
+        "asset_keys":  ASSET_KEYS,
     }
 
-    # === Escribir los 4 archivos ===
+    # ---- 8. Escribir archivos ----
     with open(OUTPUT_JSON, "w") as f:
         json.dump(out, f, indent=2)
     _write_summary_csv(out, used, OUTPUT_SUMMARY_CSV)
     _write_correlation_csv(corr_full, OUTPUT_CORR_CSV)
     _write_prices_csv(df, OUTPUT_PRICES_CSV)
+    _write_monthly_csv(monthly_log_rets, OUTPUT_MONTHLY_CSV)
 
-    # === Resumen en consola ===
-    print(f"\\n{'KEY':<8}{'TICKER':<12}{'CAGR':>9}{'SIGMA':>9}{'BETA_SP':>10}")
-    for k in present:
-        print(f"{k:<8}{used.get(k,'-'):<12}{histRet_all[k]*100:>8.2f}%{sigma_all[k]*100:>8.2f}%{stats[k]['beta_sp']:>9.3f}")
+    # ---- 9. Resumen consola ----
+    print(f"\\n{'KEY':<8}{'TICKER':<12}{'CAGR':>8}{'SIGMA':>8}{'MIN1Y':>9}{'DAMOD':>8}")
+    for k in ASSET_KEYS:
+        cagr = histRet_all[k]
+        sig  = sigma_all[k]
+        m1y  = hist_1y_min_full[k]
+        dmd  = DAMODARAN_EXPECTED_RETURNS.get(k, 0.0)
+        print(f"{k:<8}{used.get(k,'-'):<12}{cagr*100:>7.2f}%{sig*100:>7.2f}%{m1y*100:>8.2f}%{dmd*100:>7.2f}%")
 
     print(f"\\n{'='*62}")
     print("ARCHIVOS GENERADOS:")
-    print(f"  {OUTPUT_JSON:35s}  <- carga este en la calculadora web")
-    print(f"  {OUTPUT_SUMMARY_CSV:35s}  <- abre en Excel: metricas por activo")
-    print(f"  {OUTPUT_CORR_CSV:35s}  <- abre en Excel: matriz 16x16")
-    print(f"  {OUTPUT_PRICES_CSV:35s}  <- abre en Excel: precios diarios crudos")
+    print(f"  {OUTPUT_JSON:36s}  <- cargalo en la calculadora")
+    print(f"  {OUTPUT_SUMMARY_CSV:36s}  <- 1 fila por activo (Excel)")
+    print(f"  {OUTPUT_CORR_CSV:36s}  <- matriz 16x16 (Excel)")
+    print(f"  {OUTPUT_PRICES_CSV:36s}  <- precios diarios crudos")
+    print(f"  {OUTPUT_MONTHLY_CSV:36s}  <- retornos mensuales reales (alimenta backtest)")
     print(f"{'='*62}")
 
 
@@ -2122,6 +2475,9 @@ export default function Calculadora() {
                 {marketData.meta && (
                   <>
                     {" "}· <strong>{marketData.meta.years} años</strong> ({marketData.meta.date_from} → {marketData.meta.date_to}, {marketData.meta.days?.toLocaleString?.()} días)
+                    {marketData.meta.schema_version && (
+                      <>{" "}· schema <code style={styles.modalCode}>{marketData.meta.schema_version}</code></>
+                    )}
                   </>
                 )}
                 {(() => {

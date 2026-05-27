@@ -3,6 +3,7 @@ import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea,
   ComposedChart, Bar, ScatterChart, Scatter, ZAxis, Cell,
+  PieChart, Pie, Legend,
 } from "recharts";
 
 // ============================================================
@@ -13,26 +14,26 @@ import {
 // ============================================================
 const ASSETS = [
   // USD - Renta Variable
-  { id: "cspx",  name: "ETF S&P 500 (CSPX/VUAA)",     shortName: "S&P 500",        desc: "500 mayores empresas USA · acc UCITS Irlanda", cur: "USD", cat: "Renta Variable USD",   ret: 0.090, vol: 0.1803, minW: 0.10, maxW: 0.25, defW: 0.15, retLow: 0.08, retHigh: 0.10, histRet: 0.1662, isCash: false },
-  { id: "cndx",  name: "ETF Nasdaq 100 (CNDX)",       shortName: "Nasdaq 100",     desc: "100 mayores tech-heavy USA · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.110, vol: 0.2207, minW: 0.05, maxW: 0.15, defW: 0.08, retLow: 0.10, retHigh: 0.12, histRet: 0.2258, isCash: false },
-  { id: "iwda",  name: "Developed Markets ex USA (EFA)", shortName: "Dev ex-US", desc: "Developed markets excluyendo USA (Europa, Japón, Asia desarrollada) · USA-listed", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
-  { id: "msft",  name: "Activo 1 JL (default MSFT)",   shortName: "Activo 1 JL",    desc: "Stock individual configurable (slot 1)", cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
-  { id: "uber",  name: "Activo 2 JL (default UBER)",   shortName: "Activo 2 JL",    desc: "Stock individual configurable (slot 2)", cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
+  { id: "cspx",  name: "iShares Core S&P 500 UCITS ETF",                shortName: "S&P 500",        desc: "500 mayores empresas USA · acc UCITS Irlanda", cur: "USD", cat: "Renta Variable USD",   ret: 0.090, vol: 0.1803, minW: 0.10, maxW: 0.25, defW: 0.15, retLow: 0.08, retHigh: 0.10, histRet: 0.1662, isCash: false },
+  { id: "cndx",  name: "iShares NASDAQ 100 UCITS ETF",                  shortName: "Nasdaq 100",     desc: "100 mayores tech-heavy USA · acc UCITS", cur: "USD", cat: "Renta Variable USD",   ret: 0.110, vol: 0.2207, minW: 0.05, maxW: 0.15, defW: 0.08, retLow: 0.10, retHigh: 0.12, histRet: 0.2258, isCash: false },
+  { id: "iwda",  name: "iShares MSCI EAFE ETF",                          shortName: "Dev ex-US",      desc: "Developed markets excluyendo USA (Europa, Japón, Asia desarrollada) · USA-listed", cur: "USD", cat: "Renta Variable USD",   ret: 0.0775, vol: 0.1649, minW: 0.05, maxW: 0.20, defW: 0.10, retLow: 0.07, retHigh: 0.085, histRet: 0.1406, isCash: false },
+  { id: "msft",  name: "Microsoft Corporation",                          shortName: "Activo 1 JL",    desc: "Stock individual configurable (slot 1)", cur: "USD", cat: "Renta Variable USD",   ret: 0.125, vol: 0.2930, minW: 0.01, maxW: 0.05, defW: 0.03, retLow: 0.11, retHigh: 0.14, histRet: 0.2020, isCash: false },
+  { id: "uber",  name: "Uber Technologies, Inc.",                        shortName: "Activo 2 JL",    desc: "Stock individual configurable (slot 2)", cur: "USD", cat: "Renta Variable USD",   ret: 0.105, vol: 0.5086, minW: 0.01, maxW: 0.05, defW: 0.02, retLow: 0.09, retHigh: 0.12, histRet: 0.0872, isCash: false },
   // USD - Refugio
-  { id: "igln",  name: "Oro (IGLN)",                  shortName: "Oro",            desc: "ETF físico oro · cobertura inflación + tail risk", cur: "USD", cat: "Refugio / Commodities", ret: 0.050, vol: 0.1729, minW: 0.03, maxW: 0.10, defW: 0.05, retLow: 0.04, retHigh: 0.06, histRet: 0.1994, isCash: false },
+  { id: "igln",  name: "iShares Physical Gold ETC",                      shortName: "Oro",            desc: "ETF físico oro · cobertura inflación + tail risk", cur: "USD", cat: "Refugio / Commodities", ret: 0.050, vol: 0.1729, minW: 0.03, maxW: 0.10, defW: 0.05, retLow: 0.04, retHigh: 0.06, histRet: 0.1994, isCash: false },
   // USD - Renta Fija
-  { id: "vtc",   name: "Bonos Corp Acc (LQDA.L)",     shortName: "Bonos Corp",     desc: "USD investment-grade corporate bonds · acc UCITS", cur: "USD", cat: "Renta Fija USD",       ret: 0.050, vol: 0.0842, minW: 0.03, maxW: 0.15, defW: 0.06, retLow: 0.045, retHigh: 0.055, histRet: 0.0238, isCash: false },
-  { id: "bil",   name: "Treasury 0-1Y Acc (ZPR1.L)",  shortName: "Treasury 0-1Y",  desc: "Treasury bills USA ultra-corto · proxy money market", cur: "USD", cat: "Renta Fija USD",       ret: 0.0475, vol: 0.00, minW: 0.02, maxW: 0.10, defW: 0.04, retLow: 0.045, retHigh: 0.050, histRet: 0.0270, isCash: true },
-  { id: "ief",   name: "Treasury 7-10Y Acc (CBU7.L)", shortName: "Treasury 10Y",   desc: "Treasury bonds USA duración intermedia · diversificador", cur: "USD", cat: "Renta Fija USD",       ret: 0.0425, vol: 0.0743, minW: 0.03, maxW: 0.12, defW: 0.06, retLow: 0.040, retHigh: 0.045, histRet: 0.0063, isCash: false },
+  { id: "vtc",   name: "iShares USD Corporate Bond UCITS ETF",           shortName: "Bonos Corp",     desc: "USD investment-grade corporate bonds · acc UCITS", cur: "USD", cat: "Renta Fija USD",       ret: 0.050, vol: 0.0842, minW: 0.03, maxW: 0.15, defW: 0.06, retLow: 0.045, retHigh: 0.055, histRet: 0.0238, isCash: false },
+  { id: "bil",   name: "iShares 0-3 Month Treasury Bond ETF",            shortName: "Treasury 0-3M",  desc: "Treasury bills USA ultra-corto · proxy money market", cur: "USD", cat: "Renta Fija USD",       ret: 0.0475, vol: 0.00, minW: 0.02, maxW: 0.10, defW: 0.04, retLow: 0.045, retHigh: 0.050, histRet: 0.0270, isCash: true },
+  { id: "ief",   name: "iShares 7-10 Year Treasury Bond ETF",            shortName: "Treasury 10Y",   desc: "Treasury bonds USA duración intermedia · diversificador", cur: "USD", cat: "Renta Fija USD",       ret: 0.0425, vol: 0.0743, minW: 0.03, maxW: 0.12, defW: 0.06, retLow: 0.040, retHigh: 0.045, histRet: 0.0063, isCash: false },
   // USD - Especulativo
-  { id: "btc",   name: "Bitcoin",                     shortName: "Bitcoin",        desc: "Crypto · alta vol · tope 5% por gestión prudencial", cur: "USD", cat: "Especulativo",         ret: 0.200, vol: 0.6439, minW: 0.05, maxW: 0.05, defW: 0.05, retLow: 0.15, retHigh: 0.25, histRet: 0.4416, isCash: false },
+  { id: "btc",   name: "Bitcoin USD",                                    shortName: "Bitcoin",        desc: "Crypto · alta vol · tope 5% por gestión prudencial", cur: "USD", cat: "Especulativo",         ret: 0.200, vol: 0.6439, minW: 0.05, maxW: 0.05, defW: 0.05, retLow: 0.15, retHigh: 0.25, histRet: 0.4416, isCash: false },
   // USD - Cash
-  { id: "ibsav", name: "Cuenta Ahorros IB (USD)",     shortName: "Ahorros IB",     desc: "Interactive Brokers cash sweep USD · liquidez total", cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0314, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.04, retLow: 0.03, retHigh: 0.0314, histRet: 0.015, isCash: true },
-  { id: "cdusd", name: "Plazo Fijo CD (USD)",         shortName: "CD USD",         desc: "Certificate of Deposit USD · plazo fijo bancario", cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0325, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.03, retLow: 0.020, retHigh: 0.045, histRet: 0.020, isCash: true },
+  { id: "ibsav", name: "Cuenta Ahorros IB (USD)",                        shortName: "Ahorros IB",     desc: "Interactive Brokers cash sweep USD · liquidez total", cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0314, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.04, retLow: 0.03, retHigh: 0.0314, histRet: 0.015, isCash: true },
+  { id: "cdusd", name: "Plazo Fijo CD (USD)",                            shortName: "CD USD",         desc: "Certificate of Deposit USD · plazo fijo bancario", cur: "USD", cat: "Cash / Equivalentes",  ret: 0.0325, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.03, retLow: 0.020, retHigh: 0.045, histRet: 0.020, isCash: true },
   // PEN - Renta Variable
-  { id: "epu",   name: "EPU - proxy El Dorado RV",    shortName: "EPU Perú",       desc: "ETF mercado Perú · proxy de RV local concentrada", cur: "PEN", cat: "Perú - Renta Variable", ret: 0.080, vol: 0.2636, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.07, retHigh: 0.09, histRet: 0.1717, isCash: false },
+  { id: "epu",   name: "iShares MSCI Peru and Global Exposure ETF",      shortName: "EPU Perú",       desc: "ETF mercado Perú · proxy de RV local concentrada", cur: "PEN", cat: "Perú - Renta Variable", ret: 0.080, vol: 0.2636, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.07, retHigh: 0.09, histRet: 0.1717, isCash: false },
   // PEN - Renta Fija (synthetic — no public ticker)
-  { id: "pensov",name: "Bonos Soberanos PEN (sint.)", shortName: "Bonos Sob PEN",  desc: "Bonos soberanos Perú · sintético (sin ticker público)", cur: "PEN", cat: "Perú - Renta Fija",    ret: 0.060, vol: 0.07, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.055, retHigh: 0.065, histRet: 0.045, isCash: false },
+  { id: "pensov",name: "Bonos Soberanos PEN (sintético)",                shortName: "Bonos Sob PEN",  desc: "Bonos soberanos Perú · sintético (sin ticker público)", cur: "PEN", cat: "Perú - Renta Fija",    ret: 0.060, vol: 0.07, minW: 0.02, maxW: 0.08, defW: 0.04, retLow: 0.055, retHigh: 0.065, histRet: 0.045, isCash: false },
   // PEN - Cash
   { id: "pfpen", name: "Plazo Fijo PEN",              shortName: "Plazo Fijo PEN", desc: "Plazo fijo soles · tasa local bancaria", cur: "PEN", cat: "Cash / Equivalentes",  ret: 0.0475, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.02, retLow: 0.040, retHigh: 0.055, histRet: 0.045, isCash: true },
   { id: "savpen",name: "Cuenta Ahorros PEN",          shortName: "Ahorros PEN",    desc: "Cuenta ahorros soles · liquidez inmediata", cur: "PEN", cat: "Cash / Equivalentes",  ret: 0.045, vol: 0.00, minW: 0, maxW: 0.10, defW: 0.02, retLow: 0.040, retHigh: 0.050, histRet: 0.035, isCash: true },
@@ -144,10 +145,68 @@ function randn() {
 //   resto:  100% (sin tope)
 // Cuando el toggle "Topes por volatilidad" está OFF, todos quedan en 100%.
 // ============================================================
+// ============================================================
+// AGRUPACIÓN POR CLASE DE ACTIVO (sin distinción de moneda)
+// 5 buckets: Renta Variable, Renta Fija, Cash y Equiv., Commodities, Bitcoin
+// ============================================================
+const ASSET_GROUP_ORDER = [
+  "Renta Variable",
+  "Renta Fija",
+  "Cash y Equivalentes",
+  "Commodities",
+  "Bitcoin",
+];
+const ASSET_GROUP_COLORS = {
+  "Renta Variable":      "#7a1b1b",  // burgundy (var(--accent))
+  "Renta Fija":          "#3a5a7c",  // teal-blue
+  "Cash y Equivalentes": "#6b5e4d",  // ink-muted warm
+  "Commodities":         "#b8923a",  // gold
+  "Bitcoin":             "#f7931a",  // bitcoin orange
+};
+function groupOf(asset) {
+  if (asset.id === "btc") return "Bitcoin";
+  if (asset.id === "igln") return "Commodities";
+  if (asset.isCash) return "Cash y Equivalentes";
+  if ((asset.cat || "").toLowerCase().includes("fija")) return "Renta Fija";
+  return "Renta Variable";
+}
+function computeGroupWeights(weights, assets) {
+  const totals = {};
+  for (const g of ASSET_GROUP_ORDER) totals[g] = 0;
+  weights.forEach((w, i) => {
+    const g = groupOf(assets[i]);
+    totals[g] += w;
+  });
+  return ASSET_GROUP_ORDER
+    .map(g => ({ name: g, value: totals[g], color: ASSET_GROUP_COLORS[g] }))
+    .filter(d => d.value > 0.001);
+}
+
 function recommendedMaxW(asset) {
   if (asset.vol > 0.50) return 0.05;
   if (asset.vol > 0.25) return 0.10;
   return 1.0;
+}
+
+// ============================================================
+// BLEND CONSENSO → DAMODARAN (CAGR sobre 10 años)
+// El consenso de analistas es típicamente un target de 1 año (puede ser
+// extremo, e.g. MSFT mean 34%). Damodaran es la rentabilidad de equilibrio
+// de largo plazo (~9% equity). Interpolamos linealmente desde el consenso
+// (año 1) hasta Damodaran (año 10), computamos el wealth multiplier de
+// esa trayectoria, y devolvemos la CAGR equivalente.
+//
+// Ejemplo: blend(0.30, 0.09, 10) ≈ 0.193 (19.3% CAGR)
+// ============================================================
+function blendConsensusDamodaran(consensus, damodaran, years = 10) {
+  if (typeof consensus !== "number" || typeof damodaran !== "number") return consensus;
+  if (years < 2) return consensus;
+  let wealth = 1;
+  for (let t = 0; t < years; t++) {
+    const r = consensus + (damodaran - consensus) * (t / (years - 1));
+    wealth *= (1 + r);
+  }
+  return Math.pow(wealth, 1 / years) - 1;
 }
 
 // Portfolio-level moments given weights vector and effective returns array
@@ -2000,9 +2059,32 @@ export default function Calculadora() {
         if (marketData.ticker_meta?.[baseKey]) {
           asset.tickerMeta = marketData.ticker_meta[baseKey];
         }
-        // Years de history disponibles para este activo
+        // Years de history disponibles para este activo (per-ticker o overall fallback)
         if (typeof marketData.meta?.years_available?.[baseKey] === "number") {
           asset.yearsAvailable = marketData.meta.years_available[baseKey];
+        } else if (typeof marketData.meta?.years === "number") {
+          // Fallback: ventana general del JSON (cuando el script viejo no incluye per-ticker)
+          asset.yearsAvailable = marketData.meta.years;
+        }
+      }
+      // BLENDED P/N/O: interpolar consenso → Damodaran en 10y y tomar CAGR
+      asset.pBlended = blendConsensusDamodaran(asset.consensusLow,  asset.damodaran);
+      asset.nBlended = blendConsensusDamodaran(asset.consensusMean, asset.damodaran);
+      asset.oBlended = blendConsensusDamodaran(asset.consensusHigh, asset.damodaran);
+      // OVERRIDE por realidad histórica: si la CAGR histórica realizada fue más
+      // extrema que el blended, el histórico manda (sin alteraciones).
+      // - HIST > OPTIM blended → OPTIM = HIST (la realidad superó al optimismo)
+      // - HIST < PESIM blended → PESIM = HIST (la realidad fue peor que el pesimismo)
+      asset.pBlendedFromHist = false;
+      asset.oBlendedFromHist = false;
+      if (typeof asset.histRet === "number" && isFinite(asset.histRet)) {
+        if (typeof asset.oBlended === "number" && asset.histRet > asset.oBlended) {
+          asset.oBlended = asset.histRet;
+          asset.oBlendedFromHist = true;
+        }
+        if (typeof asset.pBlended === "number" && asset.histRet < asset.pBlended) {
+          asset.pBlended = asset.histRet;
+          asset.pBlendedFromHist = true;
         }
       }
       // Override slots editables (idx 3, 4): renombrados a "Activo 1 JL" / "Activo 2 JL"
@@ -2067,6 +2149,9 @@ export default function Calculadora() {
   // Si falta alguno, usa el que haya. Si no hay ninguno, cae a asset.ret.
   // ==========================================================
   const defaultReturnFor = (asset) => {
+    // Nuevo default: el "N" blended (CAGR del path consenso neutral → Damodaran en 10y)
+    if (typeof asset.nBlended === "number" && isFinite(asset.nBlended)) return asset.nBlended;
+    // Fallback: promedio simple
     const vals = [];
     if (typeof asset.consensusMean === "number" && isFinite(asset.consensusMean)) vals.push(asset.consensusMean);
     if (typeof asset.damodaran    === "number" && isFinite(asset.damodaran))    vals.push(asset.damodaran);
@@ -2093,6 +2178,20 @@ export default function Calculadora() {
 
   // Data fetch state — symbolic for now, real fetch happens via the chat workflow
   const [dataPanelOpen, setDataPanelOpen] = useState(false);
+
+  // ============== Inputs del header ==============
+  // Monto inicial: si vacío → default 10,000 USD
+  // DCA mensual: si vacío → 0 (sin aportes periódicos). Periodicidad asumida = mensual.
+  const [investmentAmount, setInvestmentAmount] = useState("");
+  const [dcaMonthly, setDcaMonthly] = useState("");
+  const V0_eff = useMemo(() => {
+    const n = parseFloat((investmentAmount || "").toString().replace(/,/g, ""));
+    return (isFinite(n) && n > 0) ? n : 10000;
+  }, [investmentAmount]);
+  const dcaMonthly_eff = useMemo(() => {
+    const n = parseFloat((dcaMonthly || "").toString().replace(/,/g, ""));
+    return (isFinite(n) && n > 0) ? n : 0;
+  }, [dcaMonthly]);
 
   // Pignoración state
   const [ltv0, setLtv0] = useState(0.30);
@@ -2261,32 +2360,64 @@ export default function Calculadora() {
   const penW = totalW - usdW;
 
   // ----- Horizon analysis (analytical, log-normal) -----
+  // Considera el monto inicial del usuario (V0_eff) y opcionalmente aportes DCA mensuales.
+  // Si DCA > 0: el valor final esperado se compone de (1) el patrimonio del V0 inicial
+  // creciendo a CAGR=mu durante T años, más (2) la suma de aportes mensuales con su crecimiento.
+  // Para los percentiles aplicamos el multiplicador lognormal solo al V0 inicial (los aportes
+  // futuros tienen su propia distribución conjunta — esta simplificación es razonable para
+  // mostrar rangos y bandas; las simulaciones Monte Carlo en pignoración usarán el modelo correcto).
+  const futureValueDCA = useCallback((rate, years, V0in, monthlyContrib) => {
+    if (monthlyContrib <= 0) return V0in * Math.exp(rate * years);
+    // Conversión a tasa mensual continua
+    const rMonthly = Math.exp(rate / 12) - 1;
+    const nMonths = years * 12;
+    const fvLump = V0in * Math.pow(1 + rMonthly, nMonths);
+    const fvAnnuity = rMonthly > 0
+      ? monthlyContrib * (Math.pow(1 + rMonthly, nMonths) - 1) / rMonthly
+      : monthlyContrib * nMonths;
+    return fvLump + fvAnnuity;
+  }, []);
   const horizonScenarios = useMemo(() => {
-    const V0 = 10000;
+    const V0 = V0_eff;
+    const dca = dcaMonthly_eff;
     const percentiles = { muyPesimista: 0.01, pesimista: 0.10, neutro: 0.50, optimista: 0.90, muyOptimista: 0.99 };
     const out = {};
     for (const [k, p] of Object.entries(percentiles)) {
       const mult = lognormalPercentile(mu, sigma, horizon, p);
-      const value = V0 * mult;
-      const cagr = cagrFromMultiple(mult, horizon);
-      out[k] = { mult, value, cagr };
+      // Patrimonio del V0 al percentil p (multiplicador lognormal)
+      const valueV0 = V0 * mult;
+      // Aportes DCA: usan la CAGR efectiva del percentil para proyectarse
+      const cagrAtPct = cagrFromMultiple(mult, horizon);
+      const valueDCA = dca > 0
+        ? futureValueDCA(Math.log(1 + cagrAtPct), horizon, 0, dca) // aportes solamente
+        : 0;
+      const value = valueV0 + valueDCA;
+      const totalIn = V0 + dca * 12 * horizon;
+      // CAGR equivalente sobre el aporte total (no es el CAGR puro, pero da una medida de rentabilidad efectiva)
+      const cagrEquiv = totalIn > 0 ? Math.pow(value / totalIn, 1/horizon) - 1 : 0;
+      out[k] = { mult, value, valueV0, valueDCA, totalIn, cagr: cagrAtPct, cagrEquiv };
     }
     // Confidence floors (lower-tail)
     const floors = {};
     for (const c of [0.90, 0.95, 0.99]) {
       const p = 1 - c;
       const mult = lognormalPercentile(mu, sigma, horizon, p);
-      floors[c] = { mult, value: V0 * mult, cagr: cagrFromMultiple(mult, horizon) };
+      const valueV0 = V0 * mult;
+      const cagrAtPct = cagrFromMultiple(mult, horizon);
+      const valueDCA = dca > 0
+        ? futureValueDCA(Math.log(1 + cagrAtPct), horizon, 0, dca)
+        : 0;
+      floors[c] = { mult, value: valueV0 + valueDCA, cagr: cagrAtPct };
     }
     return { scenarios: out, floors };
-  }, [mu, sigma, horizon]);
+  }, [mu, sigma, horizon, V0_eff, dcaMonthly_eff, futureValueDCA]);
 
   // ----- CAGR probability density distribution (log-normal) -----
   // X = log(1+CAGR) is normal with mean (μ - σ²/2) and std σ/√T
   // Density of CAGR uses Jacobian: f_CAGR(c) = f_X(log(1+c)) / (1+c)
   const distributionData = useMemo(() => {
     const T = horizon;
-    const V0 = 10000;
+    const V0 = V0_eff;
     const xMean = mu - 0.5 * sigma * sigma;
     const xStd = sigma / Math.sqrt(T);
     // Range: from ~P0.1 to ~P99.9 to capture full tails
@@ -2347,18 +2478,18 @@ export default function Calculadora() {
     setTimeout(() => {
       // Full simulation with per-year percentiles
       const sim = runFullPledgeSim({
-        mu, sigma, T: pledgeHorizon, V0: 10000,
+        mu, sigma, T: pledgeHorizon, V0: V0_eff,
         ltv0, intRate, marginCallLTV, withdrawalPct, N: 3000,
       });
       // Sell alternative (tax cost if selling instead of pledging)
       const sellAlt = computeSellAlternative({
-        mu, sigma, T: pledgeHorizon, V0: 10000,
+        mu, sigma, T: pledgeHorizon, V0: V0_eff,
         withdrawalPct, wUSD: usdW, wPEN: penW,
         taxUSDGains, taxPENGains,
       });
       // Withdrawal sweep: P(MC) vs withdrawal % keeping LTV constant
       const sweep = runWithdrawalSweep({
-        mu, sigma, T: pledgeHorizon, V0: 10000,
+        mu, sigma, T: pledgeHorizon, V0: V0_eff,
         ltv0, intRate, marginCallLTV, N: 1500,
       });
       // Horizon sweep: Sharpe del esfuerzo vs T (busca el horizonte optimo)
@@ -2366,7 +2497,7 @@ export default function Calculadora() {
       const pfNet = pfPreTax * (1 - taxPEN);
       const horizonSweep = runHorizonSweep({
         mu, sigma, ltv0, intRate, marginCallLTV, withdrawalPct,
-        pfRateNet: pfNet, V0: 10000, N: 1500,
+        pfRateNet: pfNet, V0: V0_eff, N: 1500,
       });
       setPledgeResult({ ...sim, sellAlt, sweep, horizonSweep });
       setPledgeRunning(false);
@@ -2500,7 +2631,7 @@ export default function Calculadora() {
     setHeatmapRunning(true);
     setTimeout(() => {
       const result = runHeatmap({
-        mu, sigma, T: pledgeHorizon, V0: 10000,
+        mu, sigma, T: pledgeHorizon, V0: V0_eff,
         intRate, marginCallLTV, N: 800,
       });
       setHeatmapResult(result);
@@ -2511,12 +2642,21 @@ export default function Calculadora() {
   // Update one weight, optionally rebalancing
   // (Removed: weights are now derived from Markowitz, not user-edited)
 
-  // Group assets by category
-  const grouped = effectiveAssets.reduce((acc, a, i) => {
-    if (!acc[a.cat]) acc[a.cat] = [];
-    acc[a.cat].push({ ...a, idx: i });
-    return acc;
-  }, {});
+  // Group assets por clase (5 buckets independientes de moneda) en orden fijo
+  const grouped = useMemo(() => {
+    const acc = {};
+    for (const g of ASSET_GROUP_ORDER) acc[g] = [];
+    effectiveAssets.forEach((a, i) => {
+      const g = groupOf(a);
+      acc[g].push({ ...a, idx: i });
+    });
+    // Devolver solo los grupos que tienen activos
+    const out = {};
+    for (const g of ASSET_GROUP_ORDER) {
+      if (acc[g].length > 0) out[g] = acc[g];
+    }
+    return out;
+  }, [effectiveAssets]);
 
   // ============================================================
   // RENDER
@@ -2528,10 +2668,40 @@ export default function Calculadora() {
       {/* ============== HEADER ============== */}
       <header style={styles.header}>
         <div>
-          <div style={styles.eyebrow}>Calculadora de Cartera · v0.1 (datos dummy)</div>
-          <h1 style={styles.title}>Frontera Eficiente <span style={styles.titleAmp}>&</span> Pignoración</h1>
-          <div style={styles.subtitle}>
-            Inversión base $10,000 · Markowitz + Monte Carlo · 16 activos USD/PEN
+          <div style={styles.eyebrow}>Calculadora de Cartera · v0.1</div>
+          <h1 style={styles.title}>
+            Calculadora <span style={styles.titleAmp}>—</span> Portafolio Jan Lucas
+          </h1>
+          <div style={styles.headerInputsRow}>
+            <label style={styles.headerInputLabel}>
+              <span style={styles.headerInputLabelText}>Monto inicial</span>
+              <span style={styles.headerInputWrap}>
+                <span style={styles.headerInputCurrency}>$</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={investmentAmount}
+                  onChange={(e) => setInvestmentAmount(e.target.value.replace(/[^0-9.,]/g, ""))}
+                  placeholder="10,000"
+                  style={styles.headerInput}
+                />
+              </span>
+            </label>
+            <label style={styles.headerInputLabel}>
+              <span style={styles.headerInputLabelText}>Aporte DCA mensual</span>
+              <span style={styles.headerInputWrap}>
+                <span style={styles.headerInputCurrency}>$</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={dcaMonthly}
+                  onChange={(e) => setDcaMonthly(e.target.value.replace(/[^0-9.,]/g, ""))}
+                  placeholder="opcional"
+                  style={styles.headerInput}
+                />
+                <span style={styles.headerInputUnit}>/ mes</span>
+              </span>
+            </label>
           </div>
         </div>
         <div style={styles.headerStats}>
@@ -2776,6 +2946,9 @@ export default function Calculadora() {
             </div>
           </div>
 
+          {/* ====== 1.5 PIE CHART DE COMPOSICIÓN POR CLASE DE ACTIVO ====== */}
+          <CompositionPie weights={weights} assets={effectiveAssets} />
+
           {/* ====== 2. CARTERA: HEADER + SWITCH + SLIDERS (ancho completo) ====== */}
           <div style={styles.cardHeader}>
             <div>
@@ -2783,7 +2956,8 @@ export default function Calculadora() {
               <div style={styles.compositionHint}>
                 Los <strong>pesos</strong> vienen del optimizador Markowitz (no editables aquí).
                 Mueve la rentabilidad de cada activo arrastrando el thumb (rojo) o haciendo click en cualquier umbral.
-                El default es el promedio simple de consenso neutral y Damodaran.
+                Los valores <strong style={{color: "#c97a2e"}}>PESIM.</strong> · <strong style={{color: "var(--gold)"}}>NEUTRAL</strong> · <strong style={{color: "#5a9d6e"}}>OPTIM.</strong> son la <strong>CAGR de 10 años</strong> del path que interpola consenso de analistas (año 1) → Damodaran (año 10).
+                Default = NEUTRAL.
               </div>
             </div>
             <div style={styles.portfolioSwitcher}>
@@ -2843,9 +3017,9 @@ export default function Calculadora() {
             <button
               onClick={resetReturnsToAutoDefault}
               style={styles.resetRetBtn}
-              title="Restaurar todas las rentabilidades al promedio simple de consenso neutral y Damodaran"
+              title="Restaurar todas las rentabilidades al N blended (CAGR del path consenso neutral → Damodaran en 10y)"
             >
-              ↻ Reset a promedio (consenso/Damodaran)
+              ↻ Reset a N (consenso → Damodaran)
             </button>
           </div>
 
@@ -3111,7 +3285,7 @@ export default function Calculadora() {
             (poca diversificación), cercanas a 0 (blanco) son independientes (diversifican), y negativas (azul) son raras pero muy valiosas.
             <em> Cash y plazos fijos no aparecen coloreados porque su σ=0 anula su contribución al riesgo.</em>
           </p>
-          <CorrelationMatrix />
+          <CorrelationMatrix effectiveAssets={effectiveAssets} correlation={effectiveC} />
         </section>
       )}
 
@@ -3150,12 +3324,19 @@ export default function Calculadora() {
           <div style={styles.headline}>
             <div style={styles.headlineLine}>
               A <strong>{horizon} años</strong>, con un <strong>{(confidence*100).toFixed(0)}%</strong> de probabilidad,
-              tu inversión de <strong>$10,000</strong> valdrá al menos
+              {dcaMonthly_eff > 0
+                ? <> tu inversión de <strong>{fmtUsd(V0_eff)}</strong> + aportes de <strong>{fmtUsd(dcaMonthly_eff)}/mes</strong> valdrá al menos </>
+                : <> tu inversión de <strong>{fmtUsd(V0_eff)}</strong> valdrá al menos </>}
               <span style={styles.headlineNumber}> {fmtUsd(horizonScenarios.floors[confidence].value)}</span>
             </div>
             <div style={styles.headlineSub}>
               equivalente a un CAGR mínimo de <strong>{fmtPct(horizonScenarios.floors[confidence].cagr, 2)}</strong>
               {" · "}escenario neutro (mediana): <strong>{fmtUsd(horizonScenarios.scenarios.neutro.value)}</strong> ({fmtPct(horizonScenarios.scenarios.neutro.cagr, 2)} CAGR)
+              {dcaMonthly_eff > 0 && (
+                <>
+                  {" · "}aporte total inyectado: <strong>{fmtUsd(V0_eff + dcaMonthly_eff * 12 * horizon)}</strong>
+                </>
+              )}
             </div>
           </div>
 
@@ -3354,37 +3535,37 @@ export default function Calculadora() {
               {
                 id: "infl",
                 icon: "📈",
-                name: "Batir la inflación",
+                name: "Inflación",
                 target: 0.03,
                 hint: "3% anual — proxy estándar de inflación",
               },
               {
                 id: "rfusd",
                 icon: "🏦",
-                name: "Batir Risk-Free Bonds EEUU",
+                name: "Risk-Free",
                 target: customReturns[iefIdx] ?? ASSETS[iefIdx].ret,
                 hint: "Treasury 10Y (IEF) · editable en Cartera y Riesgo",
               },
               {
                 id: "pfpen",
                 icon: "💵",
-                name: "Batir Plazo Fijo PEN",
+                name: "PF Pen",
                 target: customReturns[pfpenIdx] ?? ASSETS[pfpenIdx].ret,
-                hint: "Editable en Cartera y Riesgo",
+                hint: "Plazo Fijo PEN · editable en Cartera y Riesgo",
               },
               {
                 id: "sp8",
                 icon: "🎯",
-                name: "Batir S&P 500 (conservador)",
+                name: "S&P500 8%",
                 target: 0.08,
                 hint: "8% anual — premisa conservadora de largo plazo",
               },
               {
                 id: "sp10y",
                 icon: "🚀",
-                name: "Batir S&P 500 (histórico 10y)",
+                name: "S&P500 histórico 10y",
                 target: ASSETS[cspxIdx].histRet,
-                hint: "Promedio histórico cargado en Cartera y Riesgo",
+                hint: "Promedio histórico CSPX cargado en Cartera y Riesgo",
               },
             ];
 
@@ -3421,157 +3602,277 @@ export default function Calculadora() {
 
             return (
               <>
-                <h3 style={styles.h3}>Barra de objetivos a {horizon} años</h3>
+                <h3 style={styles.h3}>Probabilidad de batir benchmarks a {horizon} años</h3>
                 <p style={styles.distribIntro}>
                   Probabilidad lognormal de que tu cartera supere cada benchmark en {horizon} años,
                   usando tu <strong>μ = {fmtPct(mu, 2)}</strong> y <strong>σ = {fmtPct(sigma, 2)}</strong> actuales.
-                  Las metas ajustables (Risk-Free Bonds EEUU, Plazo Fijo PEN, S&P 500 histórico) toman su
-                  rentabilidad de la pestaña <em>Cartera y Riesgo</em>; cámbialas ahí y la barra se actualiza.
+                  Las metas ajustables (Risk-Free, PF Pen, S&P500 histórico 10y) toman su rentabilidad de la
+                  pestaña <em>Cartera y Riesgo</em>; cámbialas ahí y la barra se actualiza.
                 </p>
 
-                <div style={styles.goalsLadder}>
+                <div style={styles.benchmarksBox}>
+                  {/* Header de columnas con niveles de confianza como títulos prominentes sobre la barra */}
+                  <div style={styles.benchmarksHeader}>
+                    <span style={styles.benchmarksColName}>Benchmark</span>
+                    <span style={styles.benchmarksColMeta}>Meta</span>
+                    <span style={styles.benchmarksColBar}>
+                      <div style={styles.benchmarksTickLabelsRow}>
+                        {[0.50, 0.80, 0.95, 0.99].map(t => (
+                          <span
+                            key={t}
+                            style={{
+                              ...styles.benchmarksTickLabel,
+                              left: `${t * 100}%`,
+                            }}
+                          >
+                            {(t * 100).toFixed(0)}%
+                          </span>
+                        ))}
+                      </div>
+                    </span>
+                    <span style={styles.benchmarksColProb}>%</span>
+                    <span style={styles.benchmarksColSpread}>Spread</span>
+                  </div>
                   {goalsWithProb.map(g => {
                     const passed = highestPassed(g.prob);
                     const fillPct = Math.min(100, Math.max(0, g.prob * 100));
                     const color = probColor(g.prob);
+                    const spread = mu - g.target;
                     return (
-                      <div key={g.id} style={styles.goalRow}>
-                        {/* Header: nombre + número grande */}
-                        <div style={styles.goalRowHeader}>
-                          <div style={styles.goalTitle}>
-                            <span style={styles.goalIcon}>{g.icon}</span>
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <div style={styles.goalName}>{g.name}</div>
-                              <div style={styles.goalHint}>
-                                Meta: <strong>{fmtPct(g.target, 2)}</strong> CAGR
-                                <span style={styles.goalHintSep}>·</span>
-                                {g.hint}
-                              </div>
-                            </div>
-                          </div>
-                          <div style={styles.goalProbBlock}>
-                            <span style={{ ...styles.goalProbNum, color }}>
-                              {(g.prob * 100).toFixed(1)}%
-                            </span>
-                            <span style={styles.goalProbLabel}>de superarla</span>
-                          </div>
-                        </div>
-
-                        {/* Barra horizontal con relleno + ticks */}
-                        <div style={styles.goalBarTrack}>
-                          <div
-                            style={{
-                              ...styles.goalBarFill,
-                              width: `${fillPct}%`,
-                              background: color,
-                            }}
-                          />
-                          {thresholds.map(t => (
-                            <div
-                              key={t}
+                      <div key={g.id} style={styles.benchmarkRow} title={g.hint}>
+                        {/* Nombre con icon */}
+                        <span style={styles.benchmarksColName}>
+                          <span style={styles.benchmarkIcon}>{g.icon}</span>
+                          {g.name}
+                        </span>
+                        {/* Meta CAGR */}
+                        <span style={styles.benchmarksColMeta}>
+                          {fmtPct(g.target, 2)}
+                        </span>
+                        {/* Barra horizontal compacta con ticks finos */}
+                        <span style={styles.benchmarksColBar}>
+                          <span style={styles.benchmarkBarTrack}>
+                            <span
                               style={{
-                                ...styles.goalBarTick,
-                                left: `${t * 100}%`,
-                                background: g.prob >= t
-                                  ? "rgba(255,255,255,0.75)"
-                                  : "rgba(0,0,0,0.28)",
+                                ...styles.benchmarkBarFill,
+                                width: `${fillPct}%`,
+                                background: color,
                               }}
                             />
-                          ))}
-                          {/* Marcador puntiagudo en la punta del relleno */}
-                          {g.prob > 0 && g.prob < 1 && (
-                            <div
-                              style={{
-                                ...styles.goalBarPointer,
-                                left: `${fillPct}%`,
-                                borderTopColor: color,
-                              }}
-                            />
-                          )}
-                        </div>
-
-                        {/* Etiquetas de umbrales debajo */}
-                        <div style={styles.goalThresholdLabels}>
-                          {thresholds.map(t => {
-                            const ok = g.prob >= t;
-                            return (
-                              <div
+                            {thresholds.map(t => (
+                              <span
                                 key={t}
                                 style={{
-                                  ...styles.goalThresholdLabel,
+                                  ...styles.benchmarkBarTickFine,
                                   left: `${t * 100}%`,
-                                  color: ok ? color : "var(--ink-muted)",
-                                  fontWeight: ok ? 700 : 500,
-                                  opacity: ok ? 1 : 0.7,
                                 }}
-                              >
-                                <div style={{ lineHeight: 1 }}>{(t * 100).toFixed(0)}</div>
-                                <div style={{ fontSize: 10, lineHeight: 1, marginTop: 2 }}>
-                                  {ok ? "✓" : "·"}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        {/* Status footer */}
-                        <div style={styles.goalStatusRow}>
-                          {passed !== null ? (
-                            <span style={{ ...styles.goalStatusBadge, background: color }}>
-                              ✓ Supera el umbral del {(passed * 100).toFixed(0)}%
-                            </span>
-                          ) : (
-                            <span style={{ ...styles.goalStatusBadge, background: "var(--negative)" }}>
-                              ✗ No alcanza el piso del 50%
-                            </span>
-                          )}
-                          <span style={styles.goalStatusSpread}>
-                            Spread vs cartera: <strong>{fmtPct(mu - g.target, 2)}</strong>
-                            {" "}({mu > g.target ? "favor cartera" : "favor benchmark"})
+                                title={`Umbral ${(t*100).toFixed(0)}%`}
+                              />
+                            ))}
                           </span>
-                        </div>
+                        </span>
+                        {/* Porcentaje + status icon */}
+                        <span style={{ ...styles.benchmarksColProb, color }}>
+                          {(g.prob * 100).toFixed(1)}%
+                          {passed !== null
+                            ? <span style={{ marginLeft: 4, fontWeight: 700 }}>✓</span>
+                            : <span style={{ marginLeft: 4, color: "var(--negative)", fontWeight: 700 }}>✗</span>}
+                        </span>
+                        {/* Spread vs cartera */}
+                        <span style={{
+                          ...styles.benchmarksColSpread,
+                          color: spread >= 0 ? "var(--positive)" : "var(--negative)",
+                        }}>
+                          {spread >= 0 ? "+" : ""}{fmtPct(spread, 2)}
+                        </span>
                       </div>
                     );
                   })}
                 </div>
 
                 <p style={styles.goalsFootnote}>
-                  Modelo lognormal sin rebalanceo dinámico. Las metas en USD se comparan contra el CAGR
-                  de la cartera mixta — para análisis purista por moneda, ajusta el split USD/PEN en la cartera.
+                  Modelo lognormal sin rebalanceo dinámico. Spread = μcartera − meta benchmark.
                 </p>
+
+                {/* ============ Gráfico: Probabilidad de batir cada benchmark vs tiempo ============ */}
+                {(() => {
+                  // Construir serie temporal: para cada año t en 1..MAX, P(CAGR cartera > meta) por benchmark
+                  const MAX_YRS = 40;
+                  const xMeanLN = mu - 0.5 * sigma * sigma;
+                  const timeData = [];
+                  for (let t = 1; t <= MAX_YRS; t++) {
+                    const point = { year: t };
+                    goals.forEach(g => {
+                      const tgt = Math.log(1 + g.target);
+                      let prob;
+                      if (sigma > 0) {
+                        const z = (xMeanLN - tgt) * Math.sqrt(t) / sigma;
+                        prob = 0.5 * (1 + erf(z / Math.sqrt(2)));
+                      } else {
+                        prob = xMeanLN > tgt ? 1 : (xMeanLN === tgt ? 0.5 : 0);
+                      }
+                      point[g.id] = prob * 100;
+                    });
+                    timeData.push(point);
+                  }
+
+                  // Años necesarios para alcanzar cada nivel de confianza por benchmark.
+                  // P(CAGR > r) ≥ p  ⇔  (μ-σ²/2 - log(1+r)) × √T / σ ≥ z_p
+                  // Solo posible si μ-σ²/2 > log(1+r); si no, la prob CAE con el tiempo.
+                  const Z_MAP = { 50: 0, 60: 0.2533, 70: 0.5244, 80: 0.8416, 90: 1.2816, 95: 1.6449, 99: 2.3263 };
+                  const milestones = goals.map(g => {
+                    const tgt = Math.log(1 + g.target);
+                    const delta = xMeanLN - tgt;
+                    const yrs = {};
+                    Object.entries(Z_MAP).forEach(([p, z]) => {
+                      if (sigma <= 0) {
+                        yrs[p] = delta > 0 ? 0.01 : null;
+                      } else if (delta <= 0) {
+                        yrs[p] = null; // benchmark inalcanzable con esa confianza (μ-σ²/2 < log(1+r))
+                      } else {
+                        yrs[p] = Math.pow(z * sigma / delta, 2);
+                      }
+                    });
+                    return { ...g, yrs };
+                  });
+
+                  // Colores por benchmark (de "fácil" a "difícil")
+                  const benchColors = {
+                    infl:  "#5a9d6e",   // verde
+                    rfusd: "#3a5a7c",   // teal-blue
+                    pfpen: "#b8923a",   // gold
+                    sp8:   "#c97a2e",   // naranja
+                    sp10y: "#7a1b1b",   // burgundy
+                  };
+
+                  // Niveles a marcar visualmente (en %)
+                  const CONFIDENCE_LEVELS = [50, 80, 95, 99];
+
+                  // Formato amigable de años
+                  const fmtYrs = (y) => {
+                    if (y === null || y === undefined) return "—";
+                    if (y > 200) return "200+";
+                    if (y < 0.5) return "<1";
+                    if (y < 10) return `${y.toFixed(1)}`;
+                    return `${y.toFixed(0)}`;
+                  };
+
+                  return (
+                    <>
+                      <h3 style={styles.h3}>¿Cuántos años necesito para batir cada benchmark?</h3>
+                      <p style={styles.distribIntro}>
+                        Para cada benchmark, la línea muestra cómo evoluciona la <strong>probabilidad de superar</strong> a medida que pasa el tiempo.
+                        Para los benchmarks <em>alcanzables</em> (meta &lt; μ−σ²/2 de tu cartera), la línea sube hacia 100% conforme la volatilidad se promedia.
+                        Para los <em>no alcanzables</em>, la línea baja hacia 0%: el tiempo no ayuda, la cartera estructuralmente no rinde lo suficiente.
+                      </p>
+
+                      <div style={styles.chartWrap}>
+                        <ResponsiveContainer width="100%" height={400}>
+                          <LineChart data={timeData} margin={{ top: 14, right: 30, left: 20, bottom: 20 }}>
+                            <CartesianGrid stroke="rgba(0,0,0,0.06)" />
+                            <XAxis
+                              dataKey="year"
+                              stroke="var(--ink-muted)"
+                              tick={{ fontSize: 11 }}
+                              label={{ value: "Años", position: "insideBottom", offset: -8, style: { fontSize: 11, fill: "var(--ink-muted)" } }}
+                            />
+                            <YAxis
+                              domain={[0, 100]}
+                              tickFormatter={(v) => `${v}%`}
+                              stroke="var(--ink-muted)"
+                              tick={{ fontSize: 11 }}
+                              label={{ value: "Probabilidad de superar", angle: -90, position: "insideLeft", style: { fontSize: 11, fill: "var(--ink-muted)" } }}
+                            />
+                            <Tooltip
+                              formatter={(v, name) => [`${v.toFixed(1)}%`, name]}
+                              labelFormatter={(t) => `Año ${t}`}
+                              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 12 }}
+                            />
+                            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+                            {/* Líneas de referencia horizontales en los niveles de confianza */}
+                            {CONFIDENCE_LEVELS.map(p => (
+                              <ReferenceLine
+                                key={p}
+                                y={p}
+                                stroke="rgba(0,0,0,0.25)"
+                                strokeDasharray="3 4"
+                                label={{ value: `${p}%`, position: "right", fontSize: 9, fill: "var(--ink-muted)" }}
+                              />
+                            ))}
+                            {/* Línea vertical en el horizonte actual */}
+                            <ReferenceLine x={horizon} stroke="var(--ink)" strokeDasharray="3 3" label={{ value: `T = ${horizon}y`, position: "top", fontSize: 10, fill: "var(--ink)" }} />
+                            {/* Una línea por benchmark */}
+                            {goals.map(g => (
+                              <Line
+                                key={g.id}
+                                type="monotone"
+                                dataKey={g.id}
+                                stroke={benchColors[g.id]}
+                                strokeWidth={2}
+                                dot={false}
+                                name={`${g.name} (${fmtPct(g.target, 2)})`}
+                              />
+                            ))}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      {/* ============ Tabla de años necesarios por nivel de confianza ============ */}
+                      <h3 style={{ ...styles.h3, marginTop: 22 }}>Años necesarios para batir con X% de confianza</h3>
+                      <div style={styles.milestonesTableWrap}>
+                        <table style={styles.milestonesTable}>
+                          <thead>
+                            <tr>
+                              <th style={styles.milestonesThLeft}>Benchmark</th>
+                              <th style={styles.milestonesTh}>Meta</th>
+                              {CONFIDENCE_LEVELS.map(p => (
+                                <th key={p} style={styles.milestonesTh}>{p}%</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {milestones.map(g => {
+                              const delta = xMeanLN - Math.log(1 + g.target);
+                              const reachable = delta > 0;
+                              return (
+                                <tr key={g.id} style={{ borderTop: "1px dotted var(--border)" }}>
+                                  <td style={styles.milestonesTdName}>
+                                    <span style={{ ...styles.milestonesColorDot, background: benchColors[g.id] }} />
+                                    <span style={styles.benchmarkIcon}>{g.icon}</span>
+                                    {g.name}
+                                  </td>
+                                  <td style={styles.milestonesTd}>{fmtPct(g.target, 2)}</td>
+                                  {CONFIDENCE_LEVELS.map(p => {
+                                    const y = g.yrs[p];
+                                    const isInfinite = y === null;
+                                    return (
+                                      <td key={p} style={{
+                                        ...styles.milestonesTd,
+                                        color: isInfinite ? "var(--negative)" : (y > MAX_YRS ? "var(--ink-muted)" : "var(--ink)"),
+                                        fontWeight: isInfinite || y > MAX_YRS ? 500 : 700,
+                                      }}>
+                                        {fmtYrs(y)}{y !== null && y < 200 ? "y" : ""}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        <div style={styles.milestonesNote}>
+                          <strong>Lectura:</strong> los benchmarks <em>alcanzables</em> (meta &lt; μ−σ²/2 de tu cartera) muestran años finitos.
+                          Los <span style={{ color: "var(--negative)", fontWeight: 700 }}>—</span> indican que esa meta es <em>inalcanzable</em> con esa confianza:
+                          la rentabilidad esperada de la cartera es estructuralmente menor que la meta, así que más tiempo solo aumenta la incertidumbre sin acercarte.
+                          Valores ≥ {MAX_YRS}y se muestran en gris (escala fuera del gráfico).
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </>
             );
           })()}
-
-          <h3 style={styles.h3}>Trayectorias probables · bandas de percentiles</h3>
-          <div style={styles.chartWrap}>
-            <ResponsiveContainer width="100%" height={380}>
-              <ComposedChart data={fanData} margin={{ top: 10, right: 30, left: 20, bottom: 20 }}>
-                <CartesianGrid stroke="rgba(0,0,0,0.06)" />
-                <XAxis dataKey="year" stroke="var(--ink-muted)" tick={{ fontSize: 11 }}>
-                  <text>Años</text>
-                </XAxis>
-                <YAxis tickFormatter={(v) => fmtUsdK(v)} stroke="var(--ink-muted)" tick={{ fontSize: 11 }} />
-                <Tooltip
-                  formatter={(v) => fmtUsd(v)}
-                  contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 12 }}
-                />
-                {/* Stacked bands using Area with stackId, base = p01 floor */}
-                <Area type="monotone" dataKey="floor" stackId="1" stroke="none" fill="transparent" />
-                <Area type="monotone" dataKey="band_low_to_p10" stackId="1" stroke="none" fill="var(--band-outer)" name="P1-P10" />
-                <Area type="monotone" dataKey="band_p10_to_p50" stackId="1" stroke="none" fill="var(--band-mid)" name="P10-P50" />
-                <Area type="monotone" dataKey="band_p50_to_p90" stackId="1" stroke="none" fill="var(--band-mid)" name="P50-P90" />
-                <Area type="monotone" dataKey="band_p90_to_p99" stackId="1" stroke="none" fill="var(--band-outer)" name="P90-P99" />
-                <Line type="monotone" dataKey="p50" stroke="var(--accent)" strokeWidth={2.2} dot={false} name="Mediana" />
-                <ReferenceLine x={horizon} stroke="var(--ink)" strokeDasharray="3 3" />
-              </ComposedChart>
-            </ResponsiveContainer>
-            <div style={styles.legend}>
-              <span><span style={{...styles.dot, background: "var(--accent)"}}/> Mediana (P50)</span>
-              <span><span style={{...styles.dot, background: "var(--band-mid)"}}/> P10 – P90 (80% probable)</span>
-              <span><span style={{...styles.dot, background: "var(--band-outer)"}}/> P1 – P99 (98% probable)</span>
-            </div>
-          </div>
         </section>
       )}
 
@@ -4594,40 +4895,104 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
   // Pensov: σ es configurable por el usuario (sin ticker en yfinance)
   const isPensov = asset.id === "pensov";
 
-  // ============ Construir umbrales y separarlos en ARRIBA / ABAJO ============
-  // ARRIBA (datos fundamentales/realizados): Damodaran, Histórica 10y
-  // ABAJO (escenarios adversos y consenso analistas): Mín 1y, Pesim, Neutral, Optim
+  // ============ 5 markers: DAMOD + HIST arriba, PESIM/NEUTRAL/OPTIM abajo ============
+  // PESIM/NEUTRAL/OPTIM muestran los valores BLENDED (CAGR 10y del path
+  // consenso → Damodaran). DAMOD y HIST son los datos crudos de referencia.
   const upperThresholds = [
-    { key: "damodaran", label: "Damod.",   value: asset.damodaran, color: "#3a5a7c", desc: "Cost of equity por industria · Damodaran NYU Stern" },
-    { key: "hist10y",   label: "Hist",     value: asset.histRet,   color: "var(--ink-muted)", desc: "CAGR realizado últimos 10 años (yfinance)" },
+    { key: "damodaran", label: "DAMOD.", value: asset.damodaran, color: "#c97a2e", desc: "Cost of equity por industria · Damodaran NYU Stern (rentabilidad de equilibrio de largo plazo)" },
+    { key: "hist10y",   label: "HIST",   value: asset.histRet,   color: "var(--ink-muted)", desc: "CAGR realizado en la ventana disponible (yfinance)" },
   ].filter(t => typeof t.value === "number" && isFinite(t.value));
 
   const lowerThresholds = [
-    { key: "min1y",    label: "Mín 1y",   value: asset.hist1yMin,     color: "#7a1b1b", desc: "Peor ventana 12m en histórico diario" },
-    { key: "consLow",  label: "Pesim.",   value: asset.consensusLow,  color: "#c97a2e", desc: "Yahoo analyst target low (o Damodaran fallback)" },
-    { key: "consMean", label: "Neutral",  value: asset.consensusMean, color: "var(--gold)", desc: "Yahoo analyst consensus mean (o Damodaran fallback)" },
-    { key: "consHigh", label: "Optim.",   value: asset.consensusHigh, color: "#5a9d6e", desc: "Yahoo analyst target high (o Damodaran fallback)" },
+    { key: "pBlend", label: "PESIM.",  value: asset.pBlended, color: "#c97a2e",
+      desc: asset.pBlendedFromHist
+        ? `Pesimista: CAGR histórico realizado (${fmtPct(asset.histRet,2)}) — fue peor que el blended, así que prima el histórico`
+        : `Pesimista: CAGR 10y del path consenso pesim (${typeof asset.consensusLow === "number" ? fmtPct(asset.consensusLow,1) : "—"}) → Damodaran (${typeof asset.damodaran === "number" ? fmtPct(asset.damodaran,1) : "—"})` },
+    { key: "nBlend", label: "NEUTRAL", value: asset.nBlended, color: "var(--gold)",
+      desc: `Neutral: CAGR 10y del path consenso neutral (${typeof asset.consensusMean === "number" ? fmtPct(asset.consensusMean,1) : "—"}) → Damodaran (${typeof asset.damodaran === "number" ? fmtPct(asset.damodaran,1) : "—"})` },
+    { key: "oBlend", label: "OPTIM.",  value: asset.oBlended, color: "#5a9d6e",
+      desc: asset.oBlendedFromHist
+        ? `Optimista: CAGR histórico realizado (${fmtPct(asset.histRet,2)}) — superó al blended optimista, así que prima el histórico`
+        : `Optimista: CAGR 10y del path consenso optim (${typeof asset.consensusHigh === "number" ? fmtPct(asset.consensusHigh,1) : "—"}) → Damodaran (${typeof asset.damodaran === "number" ? fmtPct(asset.damodaran,1) : "—"})` },
   ].filter(t => typeof t.value === "number" && isFinite(t.value));
 
   const allThresholds = [...upperThresholds, ...lowerThresholds];
 
-  // RANGO FIJO del slider: 0% a 30% para todos los activos (armonía visual).
-  // Umbrales fuera de este rango (típicamente Mín 1y muy negativo o
-  // Consenso optimista de MSFT/UBER/BTC >30%) se OMITEN visualmente.
-  // El thumb se clampa al edge si customRet cae fuera.
-  const minRet = 0;
-  const maxRet = 0.30;
+  // RANGO PER-ASSET del bar: directamente de PESIM a OPTIM (con override
+  // por HIST ya aplicado en effectiveAssets).
+  // - PESIM = blend(consensusLow, damodaran) o HIST si HIST < blend
+  // - OPTIM = blend(consensusHigh, damodaran) o HIST si HIST > blend
+  // El bar va literalmente desde PESIM (extremo izq) a OPTIM (extremo der),
+  // con un buffer mínimo de 2% si la ventana colapsa (cash assets).
+  const pVal = typeof asset.pBlended === "number" && isFinite(asset.pBlended) ? asset.pBlended : 0;
+  const oVal = typeof asset.oBlended === "number" && isFinite(asset.oBlended) ? asset.oBlended : 0.10;
+  let minRet = pVal;
+  let maxRet = oVal;
+  // Garantizar que DAMOD y HIST también queden adentro (aunque normalmente sí lo están)
+  if (typeof asset.damodaran === "number" && isFinite(asset.damodaran)) {
+    minRet = Math.min(minRet, asset.damodaran);
+    maxRet = Math.max(maxRet, asset.damodaran);
+  }
+  if (typeof asset.histRet === "number" && isFinite(asset.histRet)) {
+    minRet = Math.min(minRet, asset.histRet);
+    maxRet = Math.max(maxRet, asset.histRet);
+  }
+  // Buffer mínimo si la ventana colapsa
+  if (maxRet - minRet < 0.02) {
+    const mid = (minRet + maxRet) / 2;
+    minRet = mid - 0.01;
+    maxRet = mid + 0.01;
+  }
   const step = 0.0005;
   const pctOf = (v) => Math.max(0, Math.min(100, ((v - minRet) / (maxRet - minRet)) * 100));
 
-  // Filtrar umbrales visibles (dentro del rango). Los que quedan fuera
-  // simplemente no se renderizan en la barra.
+  // Todos los umbrales visibles dentro del rango per-asset (los markers extremos
+  // como consensus_high 108% pueden quedar fuera; el hint debajo los lista).
   const visibleUpperThresholds = upperThresholds.filter(t => t.value >= minRet && t.value <= maxRet);
   const visibleLowerThresholds = lowerThresholds.filter(t => t.value >= minRet && t.value <= maxRet);
   const visibleAllThresholds = [...visibleUpperThresholds, ...visibleLowerThresholds];
-
-  // Flag: hay umbrales fuera del rango (para mostrar hint)
   const hiddenThresholds = allThresholds.filter(t => t.value < minRet || t.value > maxRet);
+
+  // ============ Stacking de labels para evitar superposición ============
+  // Si dos labels caen a menos de `minSpacing` (en % del ancho del bar) uno
+  // del otro, los apilamos verticalmente: el segundo se va a una fila más alta
+  // (arriba: row 0 = más cercano al bar; abajo: row 0 = más cercano al bar).
+  const assignStackRows = (thresholds, minSpacingPct = 8) => {
+    const items = thresholds
+      .map(t => ({ ...t, x: pctOf(t.value) }))
+      .sort((a, b) => a.x - b.x);
+    const rowEnds = []; // rowEnds[i] = x-position del último label asignado a la fila i
+    for (const it of items) {
+      let row = 0;
+      for (; row < rowEnds.length; row++) {
+        if (it.x - rowEnds[row] >= minSpacingPct) break;
+      }
+      if (row === rowEnds.length) rowEnds.push(it.x);
+      else rowEnds[row] = it.x;
+      it.row = row;
+    }
+    return { items, nRows: Math.max(1, rowEnds.length) };
+  };
+  const upperStacked = assignStackRows(visibleUpperThresholds);
+  const lowerStacked = assignStackRows(visibleLowerThresholds);
+  const ROW_HEIGHT = 14; // altura por fila (solo el label, sin value)
+
+  // ============ Tick marks para el eje X ============
+  const generateTicks = (mn, mx) => {
+    const range = mx - mn;
+    const niceSteps = [0.005, 0.01, 0.02, 0.025, 0.05, 0.1, 0.2, 0.25, 0.5, 1];
+    let step = 0.05;
+    for (const s of niceSteps) {
+      if (range / s <= 7) { step = s; break; }
+    }
+    const ticks = [];
+    const start = Math.ceil(mn / step) * step;
+    for (let v = start; v <= mx + 1e-9; v += step) {
+      ticks.push(Math.round(v / step) * step);
+    }
+    return ticks;
+  };
+  const xAxisTicks = generateTicks(minRet, maxRet);
 
   return (
     <div style={{
@@ -4639,9 +5004,6 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
         <div style={styles.assetTopLine}>
           {asset.editable ? (
             <>
-              <span style={styles.editableLabel}>
-                {asset.kind === "growth" ? "Activo 1 JL:" : "Activo 2 JL:"}
-              </span>
               <input
                 type="text"
                 value={asset.id.toUpperCase()}
@@ -4649,9 +5011,13 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
                 placeholder={asset.kind === "growth" ? "ej: MSFT, NVDA, AAPL" : "ej: UBER, BRK-B, JNJ"}
                 style={styles.tickerInput}
                 maxLength="8"
+                title={asset.kind === "growth" ? "Activo configurable 1 (JL)" : "Activo configurable 2 (JL)"}
               />
               <span style={styles.tag}>{asset.cur}</span>
-              <span style={styles.assetSigmaTop}>σ {fmtPct(asset.vol, 1)}</span>
+              <span style={styles.assetName}
+                    title={asset.tickerMeta?.longName ? `Nombre oficial yfinance: ${asset.tickerMeta.longName}` : undefined}>
+                {asset.tickerMeta?.longName || (asset.kind === "growth" ? "Activo 1 JL" : "Activo 2 JL")}
+              </span>
               {hasCap && (
                 <span style={enforceMaxCaps ? styles.capBadgeActive : styles.capBadgeInactive}
                       title={enforceMaxCaps
@@ -4660,17 +5026,34 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
                   tope {fmtPct(capW, 0)}
                 </span>
               )}
-              {typeof asset.yearsAvailable === "number" && (
-                <span style={asset.yearsAvailable >= 9.5 ? styles.histBadgeFull : styles.histBadgePartial}
-                      title={`${asset.yearsAvailable}y de history real en yfinance · σ y métricas computadas sobre esta ventana`}>
-                  hist {asset.yearsAvailable.toFixed(1)}y
-                </span>
-              )}
             </>
           ) : (
             <>
-              <span style={styles.assetName}>{asset.name}</span>
+              <span style={styles.assetName}
+                    title={asset.tickerMeta?.longName ? `Nombre oficial yfinance: ${asset.tickerMeta.longName}` : undefined}>
+                {asset.tickerMeta?.longName || asset.name}
+              </span>
               <span style={styles.tag}>{asset.cur}</span>
+              {hasCap && (
+                <span style={enforceMaxCaps ? styles.capBadgeActive : styles.capBadgeInactive}
+                      title={enforceMaxCaps
+                        ? `Tope activo: el optimizador no puede asignar más de ${fmtPct(capW,0)} a este activo (σ ${fmtPct(asset.vol,1)})`
+                        : `Tope sugerido ${fmtPct(capW,0)} (no aplicado · activa "Topes por volatilidad")`}>
+                  tope {fmtPct(capW, 0)}
+                </span>
+              )}
+            </>
+          )}
+          <span style={styles.assetSpacer} />
+          {/* Grupo de métricas a la derecha: HIST + σ arriba, μ abajo */}
+          <div style={styles.assetMetricsGroup}>
+            <div style={styles.assetMetricsTopRow}>
+              <span style={typeof asset.yearsAvailable === "number" && asset.yearsAvailable >= 9.5 ? styles.histBadgeFull : styles.histBadgePartial}
+                    title={typeof asset.yearsAvailable === "number"
+                      ? `${asset.yearsAvailable.toFixed(1)}y de history real en yfinance · σ y métricas computadas sobre esta ventana`
+                      : "Sin JSON cargado · σ y métricas vienen de la data embebida (asume ~10y)"}>
+                hist {typeof asset.yearsAvailable === "number" ? asset.yearsAvailable.toFixed(1) + "y" : "?"}
+              </span>
               {isPensov && setPensovSigma ? (
                 <span style={styles.assetSigmaTop}>
                   σ{" "}
@@ -4690,53 +5073,33 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
               ) : (
                 <span style={styles.assetSigmaTop}>σ {fmtPct(asset.vol, 1)}</span>
               )}
-              {hasCap && (
-                <span style={enforceMaxCaps ? styles.capBadgeActive : styles.capBadgeInactive}
-                      title={enforceMaxCaps
-                        ? `Tope activo: el optimizador no puede asignar más de ${fmtPct(capW,0)} a este activo (σ ${fmtPct(asset.vol,1)})`
-                        : `Tope sugerido ${fmtPct(capW,0)} (no aplicado · activa "Topes por volatilidad")`}>
-                  tope {fmtPct(capW, 0)}
-                </span>
-              )}
-              {typeof asset.yearsAvailable === "number" && (
-                <span style={asset.yearsAvailable >= 9.5 ? styles.histBadgeFull : styles.histBadgePartial}
-                      title={`${asset.yearsAvailable}y de history real en yfinance · σ y métricas computadas sobre esta ventana`}>
-                  hist {asset.yearsAvailable.toFixed(1)}y
-                </span>
-              )}
-            </>
-          )}
-          <span style={styles.assetSpacer} />
-          <span style={styles.assetCurrentMu}>
-            μ <strong style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 14,
-              color: "var(--accent)",
-            }}>{fmtPct(customRet, 2)}</strong>
-          </span>
+            </div>
+            <span style={styles.assetCurrentMu}>
+              μ <strong style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 14,
+                color: "var(--accent)",
+              }}>{fmtPct(customRet, 2)}</strong>
+            </span>
+          </div>
         </div>
 
         {/* Long name (yfinance) + descripción del activo */}
         {(() => {
           const meta = asset.tickerMeta;
-          const ln   = meta?.longName;
-          // longName solo si es distinto del nombre que ya mostramos arriba (evita duplicados)
-          const showLongName = ln && !asset.name.toLowerCase().includes(ln.toLowerCase().slice(0, 12));
-          // summary del JSON > desc hardcoded > nada
+          // longName ya se muestra arriba en assetName. Aquí solo summary y tags.
           const summary = (meta?.summary || asset.desc || "").trim();
           const truncated = summary.length > 220 ? summary.slice(0, 220).trim() + "…" : summary;
-          if (!showLongName && !truncated) return null;
+          const hasSectorTags = meta?.sector && meta?.industry;
+          if (!truncated && !hasSectorTags) return null;
           return (
             <div style={styles.assetMetaBlock}>
-              {showLongName && (
-                <div style={styles.assetLongName}>{ln}</div>
-              )}
               {truncated && (
                 <div style={styles.assetDesc} title={summary.length > 220 ? summary : undefined}>
                   {truncated}
                 </div>
               )}
-              {meta?.sector && meta?.industry && (
+              {hasSectorTags && (
                 <div style={styles.assetSectorRow}>
                   <span style={styles.assetSectorTag}>{meta.sector}</span>
                   <span style={styles.assetIndustryTag}>{meta.industry}</span>
@@ -4793,32 +5156,35 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
           </div>
         )}
 
-        {/* ============ Barra integrada con labels arriba/abajo (rango fijo 0-30%) ============ */}
+        {/* ============ Barra con labels stackeados + eje X de rentabilidades ============ */}
         <div style={styles.thresholdBarWrap}>
-          {/* === Labels ARRIBA: Damodaran + Histórica === */}
-          <div style={styles.thresholdLabelsTop}>
-            {visibleUpperThresholds.map((t) => (
+          {/* === Labels ARRIBA: stackeados verticalmente si están muy cerca === */}
+          <div style={{
+            ...styles.thresholdLabelsTop,
+            height: upperStacked.nRows * ROW_HEIGHT,
+          }}>
+            {upperStacked.items.map((t) => (
               <button
                 key={t.key + "-top"}
                 onClick={() => onRetChange(t.value)}
                 style={{
                   ...styles.thresholdBtnTop,
-                  left: `${pctOf(t.value)}%`,
+                  left: `${t.x}%`,
+                  // Row 0 = más cercano al bar (abajo); rows mayores = más arriba
+                  bottom: `${t.row * ROW_HEIGHT}px`,
+                  top: "auto",
                   color: t.color,
                 }}
                 title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
               >
                 <div style={styles.thresholdBtnLabel}>{t.label}</div>
-                <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
               </button>
             ))}
           </div>
 
           {/* === Track con tick lines + slider integrado === */}
           <div style={styles.thresholdTrackInteractive}>
-            {/* Fondo gris de la barra con marcadores de escala (0%, 10%, 20%, 30%) */}
             <div style={styles.thresholdTrackBg} />
-            {/* Líneas verticales en cada umbral visible (decorativas) */}
             {visibleAllThresholds.map(t => (
               <div
                 key={t.key + "-line"}
@@ -4830,7 +5196,6 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
                 title={`${t.label}: ${fmtPct(t.value, 2)}`}
               />
             ))}
-            {/* Slider — input range con track transparente; el thumb es el "pulgar" rojo */}
             <input
               type="range"
               min={minRet}
@@ -4844,26 +5209,40 @@ function AssetSlider({ asset, weight, customRet, onRetChange, taxRate, onTickerC
             />
           </div>
 
-          {/* === Labels ABAJO: Mín 1y + 3 escenarios consenso === */}
-          <div style={styles.thresholdLabelsBottom}>
-            {visibleLowerThresholds.map((t) => (
+          {/* === Labels ABAJO: stackeados verticalmente si están muy cerca === */}
+          <div style={{
+            ...styles.thresholdLabelsBottom,
+            height: lowerStacked.nRows * ROW_HEIGHT,
+          }}>
+            {lowerStacked.items.map((t) => (
               <button
                 key={t.key + "-bot"}
                 onClick={() => onRetChange(t.value)}
                 style={{
                   ...styles.thresholdBtnBottom,
-                  left: `${pctOf(t.value)}%`,
+                  left: `${t.x}%`,
+                  // Row 0 = más cercano al bar (arriba); rows mayores = más abajo
+                  top: `${t.row * ROW_HEIGHT}px`,
                   color: t.color,
                 }}
                 title={`${t.desc} · click para usar ${fmtPct(t.value, 2)}`}
               >
                 <div style={styles.thresholdBtnLabel}>{t.label}</div>
-                <div style={styles.thresholdBtnValue}>{fmtPct(t.value, 1)}</div>
               </button>
             ))}
           </div>
 
-          {/* Hint si hay umbrales fuera del rango 0-30% */}
+          {/* === Eje X: ticks de rentabilidad === */}
+          <div style={styles.thresholdXAxis}>
+            {xAxisTicks.map((v) => (
+              <div key={v.toFixed(4)} style={{ ...styles.thresholdXTickWrap, left: `${pctOf(v)}%` }}>
+                <div style={styles.thresholdXTickMark} />
+                <div style={styles.thresholdXTickLabel}>{fmtPct(v, v >= 0.1 || v <= -0.1 ? 0 : 1)}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Hint si hay umbrales fuera del rango */}
           {hiddenThresholds.length > 0 && (
             <div style={styles.thresholdHidden} title={hiddenThresholds.map(t => `${t.label}: ${fmtPct(t.value, 2)}`).join(" · ")}>
               {hiddenThresholds.length} umbral{hiddenThresholds.length > 1 ? "es" : ""} fuera de rango: {hiddenThresholds.map(t => `${t.label} ${fmtPct(t.value, 0)}`).join(" · ")}
@@ -4913,28 +5292,107 @@ function MetricCardCompact({ label, value, sub, accent }) {
   );
 }
 
+// Pie chart de composición por clase de activo (5 buckets: RV, RF, Cash, Commodities, Bitcoin)
+function CompositionPie({ weights, assets }) {
+  const data = useMemo(() => computeGroupWeights(weights, assets), [weights, assets]);
+  if (data.length === 0) return null;
+
+  // Etiqueta dentro de cada slice (porcentaje, solo si >= 4% para no llenar de números)
+  const renderLabel = (entry) => {
+    if (entry.value < 0.04) return null;
+    return `${(entry.value * 100).toFixed(0)}%`;
+  };
+
+  return (
+    <div style={styles.compositionPieBox}>
+      <div style={styles.compositionPieHeader}>
+        <h3 style={styles.compositionPieTitle}>Composición por clase de activo</h3>
+        <div style={styles.compositionPieSub}>
+          Agrupación independiente de moneda (USD/PEN). 5 buckets: Renta Variable, Renta Fija, Cash, Commodities, Bitcoin.
+        </div>
+      </div>
+      <div style={styles.compositionPieGrid}>
+        {/* Pie chart a la izquierda */}
+        <div style={styles.compositionPieChart}>
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie
+                data={data}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                innerRadius={55}
+                outerRadius={100}
+                paddingAngle={1}
+                stroke="var(--surface)"
+                strokeWidth={2}
+                label={renderLabel}
+                labelLine={false}
+              >
+                {data.map((d, i) => (
+                  <Cell key={i} fill={d.color} />
+                ))}
+              </Pie>
+              <Tooltip
+                formatter={(v) => fmtPct(v, 2)}
+                contentStyle={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 11,
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        {/* Tabla con valores a la derecha */}
+        <div style={styles.compositionPieTable}>
+          {data.map((d) => (
+            <div key={d.name} style={styles.compositionPieRow}>
+              <span style={{
+                ...styles.compositionPieSwatch,
+                background: d.color,
+              }} />
+              <span style={styles.compositionPieLabel}>{d.name}</span>
+              <span style={styles.compositionPieValue}>{fmtPct(d.value, 2)}</span>
+            </div>
+          ))}
+          <div style={{ ...styles.compositionPieRow, borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 6, fontWeight: 700 }}>
+            <span style={{ ...styles.compositionPieSwatch, background: "transparent" }} />
+            <span style={styles.compositionPieLabel}>Total</span>
+            <span style={styles.compositionPieValue}>
+              {fmtPct(data.reduce((a, d) => a + d.value, 0), 2)}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CategoryBars({ weights }) {
   const cats = {};
-  ASSETS.forEach((a, i) => { cats[a.cat] = (cats[a.cat] || 0) + weights[i]; });
+  for (const g of ASSET_GROUP_ORDER) cats[g] = 0;
+  ASSETS.forEach((a, i) => { cats[groupOf(a)] += weights[i]; });
   const total = Object.values(cats).reduce((a, b) => a + b, 0);
-  const colors = ["#7a1b1b", "#1d3b2e", "#b8923a", "#3a5a7c", "#5c4a7c", "#7c5a3a", "#3a7c5a"];
   return (
     <div style={styles.catBars}>
       <div style={styles.catBarStrip}>
-        {Object.entries(cats).map(([cat, w], i) => (
+        {ASSET_GROUP_ORDER.filter(g => cats[g] > 0).map((cat) => (
           <div key={cat} style={{
-            width: `${(w/total)*100}%`,
-            background: colors[i % colors.length],
+            width: `${(cats[cat]/total)*100}%`,
+            background: ASSET_GROUP_COLORS[cat],
             height: "100%",
-          }} title={`${cat}: ${fmtPct(w, 1)}`}/>
+          }} title={`${cat}: ${fmtPct(cats[cat], 1)}`}/>
         ))}
       </div>
       <div style={styles.catLegend}>
-        {Object.entries(cats).map(([cat, w], i) => (
+        {ASSET_GROUP_ORDER.filter(g => cats[g] > 0).map((cat) => (
           <div key={cat} style={styles.catLegendItem}>
-            <span style={{ ...styles.dot, background: colors[i % colors.length] }} />
+            <span style={{ ...styles.dot, background: ASSET_GROUP_COLORS[cat] }} />
             <span style={styles.catLegendName}>{cat}</span>
-            <span style={styles.catLegendValue}>{fmtPct(w, 1)}</span>
+            <span style={styles.catLegendValue}>{fmtPct(cats[cat], 1)}</span>
           </div>
         ))}
       </div>
@@ -5047,7 +5505,7 @@ function OptimumMarker({ cx, cy, color, label }) {
   );
 }
 
-function CorrelationMatrix() {
+function CorrelationMatrix({ effectiveAssets, correlation }) {
   // Color scale: red for positive, white for zero, blue for negative
   const colorFor = (v) => {
     if (v >= 0.7) return "rgba(122, 27, 27, 0.85)";
@@ -5059,91 +5517,142 @@ function CorrelationMatrix() {
     return "rgba(58, 90, 124, 0.85)";
   };
   const textColor = (v) => Math.abs(v) > 0.4 ? "var(--bg)" : "var(--ink)";
+
+  // Fallback si no llegan props (compat con invocación vieja)
+  const assets = effectiveAssets || ASSETS;
+  const corrM  = correlation || C;
+
+  // Reordenar índices por los 5 buckets (Renta Variable → Renta Fija → Cash → Commodities → Bitcoin)
+  // y dentro de cada bucket preservar el orden original de ASSETS.
+  const orderedIndices = useMemo(() => {
+    const byGroup = {};
+    for (const g of ASSET_GROUP_ORDER) byGroup[g] = [];
+    assets.forEach((a, i) => byGroup[groupOf(a)].push(i));
+    return ASSET_GROUP_ORDER.flatMap(g => byGroup[g]);
+  }, [assets]);
+
+  // Nombre para display: tickerMeta.longName si está, sino shortName, sino name
+  // Para activos editables (Activo 1 JL / 2 JL), siempre el ticker actual (id.toUpperCase())
+  const displayName = (asset) => {
+    if (asset.editable) return asset.id.toUpperCase();
+    return asset.shortName || asset.name;
+  };
+
   const cellSize = 42;
-  const labelColWidth = 160;  // ancho de la columna de nombres a la izquierda
+  const labelColWidth = 170;
+
+  // Para los separadores de bucket: encontrar las posiciones donde cambia el grupo
+  const groupBoundaries = useMemo(() => {
+    const set = new Set();
+    let prevG = null;
+    orderedIndices.forEach((idx, pos) => {
+      const g = groupOf(assets[idx]);
+      if (prevG !== null && g !== prevG) set.add(pos);
+      prevG = g;
+    });
+    return set;
+  }, [orderedIndices, assets]);
+
   return (
     <div style={{ overflowX: "auto", background: "var(--surface)", border: "1px solid var(--border)", padding: 14 }}>
       <table style={{ borderCollapse: "separate", borderSpacing: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 10 }}>
         <thead>
-          {/* Fila de headers angulados a -45° (legibles diagonal abajo-izq → arriba-der) */}
+          {/* Fila de headers angulados a -55° */}
           <tr>
             <th style={{ width: labelColWidth, height: 120, borderBottom: "1.5px solid var(--ink)" }}></th>
-            {ASSETS.map((a, i) => (
-              <th
-                key={i}
-                style={{
-                  width: cellSize, minWidth: cellSize, height: 120,
-                  padding: 0,
-                  borderBottom: "1.5px solid var(--ink)",
-                  position: "relative",
-                  verticalAlign: "bottom",
-                }}
-              >
-                <div
+            {orderedIndices.map((idx, pos) => {
+              const a = assets[idx];
+              const grp = groupOf(a);
+              const isBoundary = groupBoundaries.has(pos);
+              return (
+                <th
+                  key={idx}
                   style={{
-                    position: "absolute",
-                    bottom: 6,
-                    left: "50%",
-                    transformOrigin: "left bottom",
-                    transform: "translateX(0) rotate(-55deg)",
-                    whiteSpace: "nowrap",
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: "var(--ink)",
-                    fontFamily: "'DM Sans', sans-serif",
-                    letterSpacing: "0.01em",
+                    width: cellSize, minWidth: cellSize, height: 120,
+                    padding: 0,
+                    borderBottom: "1.5px solid var(--ink)",
+                    borderLeft: isBoundary ? "2px solid var(--ink)" : "none",
+                    position: "relative",
+                    verticalAlign: "bottom",
                   }}
+                  title={`${a.name} · grupo: ${grp}`}
                 >
-                  {a.shortName}
-                </div>
-              </th>
-            ))}
+                  <div
+                    style={{
+                      position: "absolute",
+                      bottom: 6,
+                      left: "50%",
+                      transformOrigin: "left bottom",
+                      transform: "translateX(0) rotate(-55deg)",
+                      whiteSpace: "nowrap",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: ASSET_GROUP_COLORS[grp],
+                      fontFamily: "'DM Sans', sans-serif",
+                      letterSpacing: "0.01em",
+                    }}
+                  >
+                    {displayName(a)}
+                  </div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
-          {ASSETS.map((aRow, i) => (
-            <tr key={i}>
-              <th style={{
-                width: labelColWidth, height: cellSize,
-                textAlign: "right",
-                fontSize: 11.5, padding: "0 10px",
-                fontWeight: 600,
-                fontFamily: "'DM Sans', sans-serif",
-                color: "var(--ink)",
-                borderRight: "1.5px solid var(--ink)",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-              title={aRow.name}
-              >
-                {aRow.shortName}
-              </th>
-              {ASSETS.map((aCol, j) => {
-                const v = C[i][j];
-                const greyOut = aRow.vol === 0 || aCol.vol === 0;
-                return (
-                  <td
-                    key={j}
-                    style={{
-                      width: cellSize, height: cellSize,
-                      background: greyOut ? "rgba(0,0,0,0.04)" : colorFor(v),
-                      color: greyOut ? "var(--ink-muted)" : textColor(v),
-                      textAlign: "center",
-                      fontWeight: i === j ? 700 : 500,
-                      border: "1px solid var(--bg)",
-                      fontSize: 10.5,
-                      fontVariantNumeric: "tabular-nums",
-                      opacity: greyOut ? 0.5 : 1,
-                    }}
-                    title={`Corr(${aRow.shortName}, ${aCol.shortName}) = ${v.toFixed(2)}`}
-                  >
-                    {v.toFixed(2)}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
+          {orderedIndices.map((iIdx, iPos) => {
+            const aRow = assets[iIdx];
+            const grpRow = groupOf(aRow);
+            const isRowBoundary = groupBoundaries.has(iPos);
+            return (
+              <tr key={iIdx}>
+                <th style={{
+                  width: labelColWidth, height: cellSize,
+                  textAlign: "right",
+                  fontSize: 11.5, padding: "0 10px",
+                  fontWeight: 600,
+                  fontFamily: "'DM Sans', sans-serif",
+                  color: ASSET_GROUP_COLORS[grpRow],
+                  borderRight: "1.5px solid var(--ink)",
+                  borderTop: isRowBoundary ? "2px solid var(--ink)" : "none",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+                title={`${aRow.name} · grupo: ${grpRow}`}
+                >
+                  {displayName(aRow)}
+                </th>
+                {orderedIndices.map((jIdx, jPos) => {
+                  const aCol = assets[jIdx];
+                  const v = corrM[iIdx][jIdx];
+                  const greyOut = aRow.vol === 0 || aCol.vol === 0;
+                  const isColBoundary = groupBoundaries.has(jPos);
+                  return (
+                    <td
+                      key={jIdx}
+                      style={{
+                        width: cellSize, height: cellSize,
+                        background: greyOut ? "rgba(0,0,0,0.04)" : colorFor(v),
+                        color: greyOut ? "var(--ink-muted)" : textColor(v),
+                        textAlign: "center",
+                        fontWeight: iIdx === jIdx ? 700 : 500,
+                        border: "1px solid var(--bg)",
+                        borderLeft: isColBoundary ? "2px solid var(--ink)" : "1px solid var(--bg)",
+                        borderTop: isRowBoundary ? "2px solid var(--ink)" : "1px solid var(--bg)",
+                        fontSize: 10.5,
+                        fontVariantNumeric: "tabular-nums",
+                        opacity: greyOut ? 0.5 : 1,
+                      }}
+                      title={`Corr(${displayName(aRow)}, ${displayName(aCol)}) = ${v.toFixed(2)}`}
+                    >
+                      {v.toFixed(2)}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div style={{ display: "flex", gap: 18, marginTop: 14, fontSize: 11, color: "var(--ink-muted)", alignItems: "center", flexWrap: "wrap" }}>
@@ -5397,22 +5906,15 @@ function ComparisonTable({ portfolios }) {
   const usedSet = new Set();
   portfolios.forEach(p => p.w.forEach((w, i) => { if (w > 0.005) usedSet.add(i); }));
 
-  // Agrupar por categoría, en el orden en que aparecen las categorías en ASSETS
-  // (mantiene la misma estructura visual que la pestaña Cartera I).
-  const catsOrdered = [];
-  const seenCat = new Set();
-  ASSETS.forEach((a, i) => {
-    if (!seenCat.has(a.cat)) {
-      seenCat.add(a.cat);
-      catsOrdered.push({ cat: a.cat, indices: [] });
-    }
-  });
+  // Agrupar por clase de activo (5 buckets independientes de moneda), en orden fijo
+  const catsOrdered = ASSET_GROUP_ORDER.map(g => ({ cat: g, indices: [] }));
   ASSETS.forEach((a, i) => {
     if (!usedSet.has(i)) return;
-    const bucket = catsOrdered.find(b => b.cat === a.cat);
+    const g = groupOf(a);
+    const bucket = catsOrdered.find(b => b.cat === g);
     if (bucket) bucket.indices.push(i);
   });
-  // Filtra categorías vacías
+  // Filtra grupos vacíos
   const groups = catsOrdered.filter(g => g.indices.length > 0);
 
   return (
@@ -5634,6 +6136,60 @@ const styles = {
     marginTop: 8,
     color: "var(--ink-muted)",
     fontSize: 13,
+  },
+  // Inputs editables en el header (monto inicial + DCA mensual)
+  headerInputsRow: {
+    display: "flex",
+    gap: 18,
+    marginTop: 12,
+    flexWrap: "wrap",
+  },
+  headerInputLabel: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    cursor: "text",
+  },
+  headerInputLabelText: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+  },
+  headerInputWrap: {
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: 4,
+    padding: "5px 10px",
+    border: "1.5px solid var(--border)",
+    borderRadius: 3,
+    background: "var(--surface)",
+    transition: "border-color 160ms",
+  },
+  headerInputCurrency: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 13,
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+  },
+  headerInput: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 15,
+    fontWeight: 600,
+    fontVariantNumeric: "tabular-nums",
+    color: "var(--ink)",
+    border: "none",
+    outline: "none",
+    background: "transparent",
+    width: 110,
+    padding: 0,
+  },
+  headerInputUnit: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
   },
   headerStats: {
     display: "flex",
@@ -7182,6 +7738,180 @@ const styles = {
   },
 
   // ============ Barra de Objetivos (Horizonte tab) ============
+  // ============ Recuadro consolidado de benchmarks (5 filas compactas) ============
+  benchmarksBox: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    padding: "10px 16px 14px 16px",
+    marginTop: 8,
+    marginBottom: 14,
+    borderRadius: 2,
+  },
+  benchmarksHeader: {
+    display: "grid",
+    gridTemplateColumns: "minmax(140px, 1.4fr) minmax(60px, 0.7fr) minmax(160px, 2.2fr) minmax(75px, 0.9fr) minmax(70px, 0.8fr)",
+    gap: 14,
+    alignItems: "center",
+    padding: "8px 6px 6px 6px",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    borderBottom: "1px solid var(--border)",
+  },
+  benchmarkRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(140px, 1.4fr) minmax(60px, 0.7fr) minmax(160px, 2.2fr) minmax(75px, 0.9fr) minmax(70px, 0.8fr)",
+    gap: 14,
+    alignItems: "center",
+    padding: "8px 6px",
+    borderBottom: "1px dotted var(--border)",
+    fontSize: 12.5,
+    fontFamily: "'DM Sans', sans-serif",
+  },
+  benchmarksColName: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    fontWeight: 600,
+    color: "var(--ink)",
+    minWidth: 0,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  benchmarkIcon: {
+    fontSize: 14,
+    flexShrink: 0,
+  },
+  benchmarksColMeta: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    fontVariantNumeric: "tabular-nums",
+    color: "var(--ink)",
+    fontWeight: 500,
+  },
+  benchmarksColBar: {
+    minWidth: 0,
+  },
+  benchmarksTickLabelsRow: {
+    position: "relative",
+    height: 14,
+  },
+  benchmarksTickLabel: {
+    position: "absolute",
+    transform: "translateX(-50%)",
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+    color: "var(--ink-muted)",
+    letterSpacing: "0.06em",
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+    textTransform: "uppercase",
+  },
+  // Tabla de milestones (años necesarios por confianza)
+  milestonesTableWrap: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    padding: "12px 16px",
+    marginTop: 8,
+    borderRadius: 2,
+  },
+  milestonesTable: {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: 13,
+  },
+  milestonesThLeft: {
+    textAlign: "left",
+    padding: "6px 8px",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    borderBottom: "1px solid var(--border)",
+  },
+  milestonesTh: {
+    textAlign: "center",
+    padding: "6px 8px",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    borderBottom: "1px solid var(--border)",
+  },
+  milestonesTdName: {
+    padding: "8px",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontWeight: 600,
+    color: "var(--ink)",
+  },
+  milestonesColorDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    border: "1px solid var(--border)",
+    flexShrink: 0,
+  },
+  milestonesTd: {
+    textAlign: "center",
+    padding: "8px",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 13,
+    fontVariantNumeric: "tabular-nums",
+  },
+  milestonesNote: {
+    marginTop: 10,
+    fontSize: 11.5,
+    color: "var(--ink-muted)",
+    lineHeight: 1.5,
+    fontStyle: "italic",
+  },
+  benchmarkBarTrack: {
+    position: "relative",
+    display: "block",
+    height: 14,
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  benchmarkBarFill: {
+    position: "absolute",
+    top: 0, left: 0, bottom: 0,
+    transition: "width 240ms ease, background 240ms ease",
+  },
+  benchmarkBarTickFine: {
+    position: "absolute",
+    top: 0, bottom: 0,
+    width: 1,
+    background: "rgba(0,0,0,0.25)",
+    pointerEvents: "none",
+  },
+  benchmarksColProb: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 13,
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+  },
+  benchmarksColSpread: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11.5,
+    fontVariantNumeric: "tabular-nums",
+    fontWeight: 600,
+    textAlign: "right",
+  },
+
   goalsLadder: {
     display: "flex",
     flexDirection: "column",
@@ -7349,6 +8079,69 @@ const styles = {
   },
 
   // ============ Caja horizontal de métricas (tab Cartera) ============
+  // ============ Composition pie chart por clase de activo ============
+  compositionPieBox: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    padding: "16px 20px 12px 20px",
+    marginBottom: 16,
+    borderRadius: 2,
+  },
+  compositionPieHeader: {
+    marginBottom: 8,
+  },
+  compositionPieTitle: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 18,
+    fontWeight: 600,
+    margin: 0,
+    letterSpacing: "-0.01em",
+    color: "var(--ink)",
+  },
+  compositionPieSub: {
+    fontSize: 11,
+    color: "var(--ink-muted)",
+    marginTop: 2,
+    lineHeight: 1.4,
+  },
+  compositionPieGrid: {
+    display: "grid",
+    gridTemplateColumns: "minmax(220px, 1fr) minmax(220px, 1fr)",
+    gap: 24,
+    alignItems: "center",
+  },
+  compositionPieChart: {
+    minWidth: 0,
+  },
+  compositionPieTable: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    minWidth: 0,
+  },
+  compositionPieRow: {
+    display: "grid",
+    gridTemplateColumns: "16px 1fr auto",
+    alignItems: "center",
+    gap: 10,
+    fontSize: 13,
+    fontFamily: "'DM Sans', sans-serif",
+  },
+  compositionPieSwatch: {
+    width: 14,
+    height: 14,
+    borderRadius: 2,
+    border: "1px solid var(--border)",
+  },
+  compositionPieLabel: {
+    color: "var(--ink)",
+  },
+  compositionPieValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontVariantNumeric: "tabular-nums",
+    fontWeight: 600,
+    color: "var(--ink)",
+  },
   metricsHorizontalBox: {
     background: "var(--surface)",
     border: "1px solid var(--border)",
@@ -7472,6 +8265,18 @@ const styles = {
 
   // ============ Asset slider: nuevos elementos ============
   assetSpacer: { flex: 1 },
+  assetMetricsGroup: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: 3,
+    minWidth: 0,
+  },
+  assetMetricsTopRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
   assetCurrentMu: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 11,
@@ -7647,7 +8452,7 @@ const styles = {
     transform: "translateX(-50%)",
   },
   thresholdBtnLabel: {
-    fontSize: 9,
+    fontSize: 9.5,
     letterSpacing: "0.04em",
     textTransform: "uppercase",
     fontWeight: 700,
@@ -7667,6 +8472,36 @@ const styles = {
     fontSize: 9.5,
     color: "var(--ink-muted)",
     fontStyle: "italic",
+    letterSpacing: "0.02em",
+    opacity: 0.7,
+  },
+  // Eje X con ticks de rentabilidad debajo del bar
+  thresholdXAxis: {
+    position: "relative",
+    height: 20,
+    marginTop: 2,
+  },
+  thresholdXTickWrap: {
+    position: "absolute",
+    top: 0,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    transform: "translateX(-50%)",
+    pointerEvents: "none",
+  },
+  thresholdXTickMark: {
+    width: 1,
+    height: 4,
+    background: "var(--ink-muted)",
+    opacity: 0.5,
+  },
+  thresholdXTickLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9,
+    color: "var(--ink-muted)",
+    fontVariantNumeric: "tabular-nums",
+    marginTop: 1,
     letterSpacing: "0.02em",
     opacity: 0.7,
   },

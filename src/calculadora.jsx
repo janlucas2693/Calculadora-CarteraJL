@@ -1013,6 +1013,81 @@ function runWithdrawalSweep({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCal
 }
 
 // ============================================================
+// CONFIDENCE TABLE — para una grilla de retiros, calcular:
+//   - P(margin call) y nivel de confianza realizado
+//   - Patrimonio neto al final del horizonte (percentiles 10/50/90)
+//   - USD/año y USD/mes promedio sobre V0
+// Retiros se modelan en modo "flat" (W constante = V0·wPct cada año),
+// igual que el sweep simple — esto da el resultado más conservador y
+// más legible para una tabla de sensibilidad (sin variabilidad por escenario).
+// Devuelve también el retiro MÁXIMO que cumple 99% / 95% / 90% de confianza.
+// ============================================================
+function runConfidenceTable({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCallLTV, N = 1500 }) {
+  // Grid de retiros en dos tramos:
+  //   - tramo bajo (0% a 0.5% en pasos de 0.05%) para detectar el punto que cumple 99%
+  //     incluso cuando el costo financiero del préstamo ya consume mucho margen
+  //   - tramo principal (0.5% a 5% en pasos de 0.25%) para sensibilidad amplia
+  const grid = [];
+  for (let p = 0;     p <= 0.005 - 1e-9; p += 0.0005) grid.push(Math.round(p * 100000) / 100000);
+  for (let p = 0.005; p <= 0.05  + 1e-9; p += 0.0025) grid.push(Math.round(p * 10000) / 10000);
+  // Pre-generar paths una sola vez y reutilizar para todos los retiros
+  const paths = simulatePaths({ mu, sigma, T, N, V0 });
+  const Loan0 = V0 * ltv0;
+  const rows = [];
+  for (const wPct of grid) {
+    const W = V0 * wPct;
+    let mcCount = 0;
+    const netFinal = new Array(N);
+    for (let s = 0; s < N; s++) {
+      let loan = Loan0;
+      let triggered = false;
+      for (let t = 1; t <= T; t++) {
+        loan = loan * (1 + intRate) + W;
+        if (!triggered && loan / paths[s][t] > marginCallLTV) {
+          triggered = true;
+          mcCount++;
+        }
+      }
+      netFinal[s] = paths[s][T] - loan;
+    }
+    netFinal.sort((a, b) => a - b);
+    const p10 = netFinal[Math.floor(N * 0.10)];
+    const p50 = netFinal[Math.floor(N * 0.50)];
+    const p90 = netFinal[Math.floor(N * 0.90)];
+    const mcProb = mcCount / N;
+    rows.push({
+      wPct,
+      W_year: W,
+      W_month: W / 12,
+      mcProb,
+      confidence: 1 - mcProb,
+      passes99: mcProb <= 0.01,
+      passes95: mcProb <= 0.05,
+      passes90: mcProb <= 0.10,
+      netFinal_p10: p10,
+      netFinal_p50: p50,
+      netFinal_p90: p90,
+    });
+  }
+  // Retiro MÁXIMO que cumple cada threshold (= el último wPct con mcProb <= threshold,
+  // dado que la curva es monotónica creciente).
+  const maxAt = (threshold) => {
+    let best = null;
+    for (const r of rows) {
+      if (r.mcProb <= threshold) best = r;
+      else break;
+    }
+    return best;
+  };
+  return {
+    rows,
+    max99: maxAt(0.01),  // 99% confianza → P(MC) ≤ 1%
+    max95: maxAt(0.05),  // 95% confianza → P(MC) ≤ 5%
+    max90: maxAt(0.10),  // 90% confianza → P(MC) ≤ 10%
+  };
+}
+
+// ============================================================
 // Heat map: P(margin call) over (LTV initial × withdrawal %) grid
 // Uses pre-generated paths for speed (same paths re-used per cell)
 // ============================================================
@@ -2135,14 +2210,33 @@ export default function Calculadora() {
       asset.yearsAvailable = undefined;
       // Apply marketData (real yfinance values) — overrides fallbacks
       if (marketData) {
-        // σ: si el JSON dice 0 para un activo no-cash, preservar el hardcoded
-        // (protege contra sintéticos como pensov que el Python no puede medir y
-        // pone como 0 si no tiene los overrides de SYNTHETIC_SIGMAS).
-        const jsonSigma = marketData.sigma?.[baseKey];
-        if (typeof jsonSigma === "number" && (jsonSigma > 0 || a.isCash)) {
-          asset.vol = jsonSigma;
+        // ====== σ ======
+        // Cash assets (BIL, IB Sav, CDs, plazos fijos): σ = 0 por design del modelo
+        // (tratados como activos sin riesgo — no contribuyen a varianza). El JSON
+        // puede tener valores absurdos para tickers UCITS de Treasury bills donde
+        // yfinance procesa mal dividendos/splits (ej: IB01.L reporta σ ~125% en
+        // este dataset — claramente roto). Por eso forzamos 0 y NO leemos el JSON.
+        // Activos no-cash: si el JSON dice 0 (típicamente sintéticos sin ticker
+        // real como pensov), preservar el σ hardcoded.
+        if (a.isCash) {
+          asset.vol = 0;
+        } else {
+          const jsonSigma = marketData.sigma?.[baseKey];
+          if (typeof jsonSigma === "number" && jsonSigma > 0) {
+            asset.vol = jsonSigma;
+          }
         }
-        if (typeof marketData.histRet?.[baseKey] === "number") asset.histRet = marketData.histRet[baseKey];
+        // ====== histRet ======
+        // Para cash, sanity-check contra valores absurdos (>15% CAGR sostenido en
+        // Treasury bills/cash es imposible). Si falla, caer al hardcoded a.ret.
+        if (typeof marketData.histRet?.[baseKey] === "number") {
+          const jsonRet = marketData.histRet[baseKey];
+          if (a.isCash) {
+            asset.histRet = (jsonRet >= 0 && jsonRet <= 0.15) ? jsonRet : a.ret;
+          } else {
+            asset.histRet = jsonRet;
+          }
+        }
         if (typeof marketData.damodaran?.[baseKey] === "number") asset.damodaran = marketData.damodaran[baseKey];
         if (typeof marketData.hist_1y_min?.[baseKey] === "number") asset.hist1yMin = marketData.hist_1y_min[baseKey];
         if (marketData.analyst_consensus?.[baseKey]) {
@@ -2164,14 +2258,40 @@ export default function Calculadora() {
           asset.yearsAvailable = marketData.meta.years;
         }
       }
-      // BLENDED P/N/O: interpolar consenso → Damodaran en 10y y tomar CAGR.
-      // PESIM/NEUTRAL/OPTIM son escenarios PROSPECTIVOS (consenso analistas → equilibrio Damodaran).
-      // HIST es un marcador histórico INDEPENDIENTE — vive en su propio eje arriba del bar.
-      // Antes había un "reality override" que forzaba OPTIM=HIST cuando HIST > OPTIM_blended,
-      // pero hacía que ambos marcadores colapsaran (caso CSPX/CNDX/BTC). Eliminado.
-      asset.pBlended = blendConsensusDamodaran(asset.consensusLow,  asset.damodaran);
-      asset.nBlended = blendConsensusDamodaran(asset.consensusMean, asset.damodaran);
-      asset.oBlended = blendConsensusDamodaran(asset.consensusHigh, asset.damodaran);
+      // ============ ESCENARIOS PESIM / NEUTRAL / OPTIM ============
+      // Activos NO-CASH: interpolamos el path consenso → Damodaran en 10y y tomamos
+      // la CAGR (modelo de reversión a equilibrio de largo plazo).
+      // Activos CASH: NO hay reversión a Damodaran — la tasa es lo que el banco
+      // paga hoy y puede subir/bajar con política monetaria. Usamos consensus
+      // directo. Si el consensus está colapsado (low=mean=high, típico de tasas
+      // fijas como las cuentas de ahorro), sintetizamos una banda razonable.
+      if (a.isCash) {
+        let cL = asset.consensusLow, cM = asset.consensusMean, cH = asset.consensusHigh;
+        const collapsed = Math.abs(cH - cL) < 1e-4;
+        if (collapsed) {
+          // Banda sintética representando cambios futuros en política monetaria:
+          //   - spread = max(50% del rate, 100 bps absolutos)
+          //   - piso del PESIM = 0.5% (no asumimos tasa cero)
+          // Ejemplos a 10y:
+          //   ibsav (1.5%):  PESIM 0.5% / NEUTRAL 1.5% / OPTIM 2.5%
+          //   cdusd (2.0%):  PESIM 1.0% / NEUTRAL 2.0% / OPTIM 3.0%
+          //   pfpen (4.5%):  PESIM 2.25% / NEUTRAL 4.5% / OPTIM 6.75%
+          //   bil   (4.5%):  PESIM 2.25% / NEUTRAL 4.5% / OPTIM 6.75%
+          const spread = Math.max(cM * 0.5, 0.01);
+          cL = Math.max(cM - spread, 0.005);
+          cH = cM + spread;
+        }
+        asset.pBlended = cL;
+        asset.nBlended = cM;
+        asset.oBlended = cH;
+      } else {
+        // No-cash: blend prospectivo consenso → Damodaran (CAGR 10y).
+        // PESIM/NEUTRAL/OPTIM son escenarios PROSPECTIVOS. HIST es marcador
+        // histórico independiente arriba del bar (no se mezcla).
+        asset.pBlended = blendConsensusDamodaran(asset.consensusLow,  asset.damodaran);
+        asset.nBlended = blendConsensusDamodaran(asset.consensusMean, asset.damodaran);
+        asset.oBlended = blendConsensusDamodaran(asset.consensusHigh, asset.damodaran);
+      }
       asset.pBlendedFromHist = false;
       asset.oBlendedFromHist = false;
       // Override slots editables (idx 3, 4): renombrados a "Activo 1 JL" / "Activo 2 JL"
@@ -2280,11 +2400,10 @@ export default function Calculadora() {
     return (isFinite(n) && n > 0) ? n : 0;
   }, [dcaMonthly]);
 
-  // Pignoración state
+  // Pignoración state (horizonte se reusa desde la pestaña III · horizonte temporal)
   const [ltv0, setLtv0] = useState(0.30);
   const [intRate, setIntRate] = useState(0.045);
   const [marginCallLTV, setMarginCallLTV] = useState(0.65);
-  const [pledgeHorizon, setPledgeHorizon] = useState(20);
   const [withdrawalPct, setWithdrawalPct] = useState(0.04); // 4% (regla del 4%)
   const [compareVsSell, setCompareVsSell] = useState(true);
   const [taxUSDGains, setTaxUSDGains] = useState(0.30);  // 30% withholding ETFs USA
@@ -2605,18 +2724,18 @@ export default function Calculadora() {
     setTimeout(() => {
       // Full simulation with per-year percentiles
       const sim = runFullPledgeSim({
-        mu, sigma, T: pledgeHorizon, V0: V0_eff,
+        mu, sigma, T: horizon, V0: V0_eff,
         ltv0, intRate, marginCallLTV, withdrawalPct, N: 3000,
       });
       // Sell alternative (tax cost if selling instead of pledging)
       const sellAlt = computeSellAlternative({
-        mu, sigma, T: pledgeHorizon, V0: V0_eff,
+        mu, sigma, T: horizon, V0: V0_eff,
         withdrawalPct, wUSD: usdW, wPEN: penW,
         taxUSDGains, taxPENGains,
       });
       // Withdrawal sweep: P(MC) vs withdrawal % keeping LTV constant
       const sweep = runWithdrawalSweep({
-        mu, sigma, T: pledgeHorizon, V0: V0_eff,
+        mu, sigma, T: horizon, V0: V0_eff,
         ltv0, intRate, marginCallLTV, N: 1500,
       });
       // Horizon sweep: Sharpe del esfuerzo vs T (busca el horizonte optimo)
@@ -2629,7 +2748,7 @@ export default function Calculadora() {
       setPledgeResult({ ...sim, sellAlt, sweep, horizonSweep });
       setPledgeRunning(false);
     }, 50);
-  }, [mu, sigma, pledgeHorizon, ltv0, intRate, marginCallLTV, withdrawalPct, taxUSDGains, taxPENGains, usdW, penW, customReturns, taxPEN, PFPEN_IDX]);
+  }, [mu, sigma, horizon, ltv0, intRate, marginCallLTV, withdrawalPct, taxUSDGains, taxPENGains, usdW, penW, customReturns, taxPEN, PFPEN_IDX]);
 
   // ===========================================================
   // Benchmark: PF PEN (Plazo Fijo Peruano sin riesgo) como
@@ -2647,7 +2766,7 @@ export default function Calculadora() {
     if (!pledgeResult || !pledgeResult.netPatrimoniesFinal) return null;
     const pfRatePreTax = customReturns[PFPEN_IDX] || 0;
     const pfRateNet    = pfRatePreTax * (1 - taxPEN);
-    const T = pledgeHorizon;
+    const T = horizon;
     const V0 = 10000;
     const W = V0 * withdrawalPct;
     const growth = Math.pow(1 + pfRateNet, T);
@@ -2673,7 +2792,22 @@ export default function Calculadora() {
       probBeatPF, medianSpread, medianNet,
       equivRate, excessCAGR, volEsfuerzo, sharpeEsfuerzo,
     };
-  }, [pledgeResult, customReturns, taxPEN, pledgeHorizon, withdrawalPct, PFPEN_IDX, sigma]);
+  }, [pledgeResult, customReturns, taxPEN, horizon, withdrawalPct, PFPEN_IDX, sigma]);
+
+  // ===========================================================
+  // CONFIDENCE TABLE — sweep de retiros (0.5%–5% en pasos de 0.25%)
+  // con P(margin call) y net patrimony al horizonte. Se recompute
+  // automáticamente cuando cambian los parámetros relevantes; se
+  // skip-ea hasta que el usuario haya corrido el Monte Carlo principal
+  // al menos una vez (señal de que está activamente trabajando en este tab).
+  // ===========================================================
+  const confidenceTable = useMemo(() => {
+    if (!pledgeResult) return null;  // espera al primer "Correr Monte Carlo"
+    return runConfidenceTable({
+      mu, sigma, T: horizon, V0: V0_eff,
+      ltv0, intRate, marginCallLTV, N: 1500,
+    });
+  }, [pledgeResult, mu, sigma, horizon, V0_eff, ltv0, intRate, marginCallLTV]);
 
   // ===========================================================
   // Escenario "Retiro maximo sostenible": dado un threshold de
@@ -2701,7 +2835,7 @@ export default function Calculadora() {
       return { wMaxPct: 0, infeasible: true };
     }
     const wMax = wMaxPct / 100;
-    const T = pledgeHorizon;
+    const T = horizon;
     const V0 = 10000;
     const W_year = V0 * wMax;
     // Re-simular con wMax
@@ -2751,20 +2885,20 @@ export default function Calculadora() {
       chartData,
       infeasible: false,
     };
-  }, [pledgeResult, mcTolerance, pledgeHorizon, mu, sigma, ltv0, intRate, marginCallLTV, pfBenchmark]);
+  }, [pledgeResult, mcTolerance, horizon, mu, sigma, ltv0, intRate, marginCallLTV, pfBenchmark]);
 
 
   const runHeatmapSim = useCallback(() => {
     setHeatmapRunning(true);
     setTimeout(() => {
       const result = runHeatmap({
-        mu, sigma, T: pledgeHorizon, V0: V0_eff,
+        mu, sigma, T: horizon, V0: V0_eff,
         intRate, marginCallLTV, N: 800,
       });
       setHeatmapResult(result);
       setHeatmapRunning(false);
     }, 50);
-  }, [mu, sigma, pledgeHorizon, intRate, marginCallLTV]);
+  }, [mu, sigma, horizon, intRate, marginCallLTV]);
 
   // Update one weight, optionally rebalancing
   // (Removed: weights are now derived from Markowitz, not user-edited)
@@ -4056,12 +4190,16 @@ export default function Calculadora() {
             <SliderControl label="Umbral margin call" value={marginCallLTV}
               min={0.50} max={0.80} step={0.05} onChange={setMarginCallLTV}
               fmt={v => fmtPct(v, 0)} hint="LTV máximo del banco" />
-            <SliderControl label="Horizonte" value={pledgeHorizon}
-              min={5} max={30} step={1} onChange={setPledgeHorizon}
-              fmt={v => `${v} años`} hint="duración estrategia" />
             <SliderControl label="Retiro anual (% capital)" value={withdrawalPct}
               min={0} max={0.08} step={0.0025} onChange={setWithdrawalPct}
               fmt={v => fmtPct(v, 2)} hint={`${fmtUsd(10000 * withdrawalPct)} sobre $10k · regla del 4%`} />
+            <div style={styles.horizonLink}>
+              <div style={styles.sliderLabel}>HORIZONTE</div>
+              <div style={styles.horizonLinkValue}>{horizon} años</div>
+              <button onClick={() => setTab("horizonte")} style={styles.horizonLinkBtn}>
+                ajustar en pestaña III →
+              </button>
+            </div>
           </div>
 
           <div style={styles.pignTaxRow}>
@@ -4113,7 +4251,7 @@ export default function Calculadora() {
                   sub={pledgeResult.avgMCTime !== null ? `Si ocurre, en promedio año ${pledgeResult.avgMCTime.toFixed(1)}` : ""}
                 />
                 <PignCard
-                  title={`Total retirado en ${pledgeHorizon} años (mediana)`}
+                  title={`Total retirado en ${horizon} años (mediana)`}
                   value={fmtUsd(pledgeResult.totalCashWithdrawn)}
                   subValue={`+ ${fmtUsd(pledgeResult.totalInterest)} intereses`}
                   caption={`Retiro target inicial: ${fmtUsd(pledgeResult.W)}/año · varía por escenario (×0.80 a ×1.20)`}
@@ -4135,6 +4273,92 @@ export default function Calculadora() {
                     sub={`tax efectivo ponderado: ${fmtPct(pledgeResult.sellAlt.weightedTax, 0)} (${fmtPct(usdW, 0)} USD / ${fmtPct(penW, 0)} PEN)`}
                   />
                 )}
+              </div>
+
+              {/* ====== SECCIÓN PRINCIPAL: ¿Cuánto puedo retirar? ====== */}
+              <div style={styles.confidenceSection}>
+                <h3 style={{ ...styles.h3, margin: 0 }}>¿Cuánto puedo retirar al año sin caer en margin call?</h3>
+                <p style={{ ...styles.intro, marginTop: 6, marginBottom: 10 }}>
+                  Para cada nivel de confianza, el retiro máximo que mantiene la probabilidad de margin call debajo del umbral
+                  (sobre <strong>{fmtUsd(V0_eff)}</strong> inicial, a <strong>{horizon} años</strong>, LTV inicial {fmtPct(ltv0, 0)},
+                  tasa {fmtPct(intRate, 2)}, umbral MC {fmtPct(marginCallLTV, 0)}). El retiro es <strong>plano</strong> (USD/año constante) — el
+                  más conservador y predecible. Si querés retiro variable con multiplicador endowment, mirá la tabla y los headline cards arriba.
+                </p>
+
+                {!confidenceTable ? (
+                  <div style={styles.placeholder}>Calculando tabla de sensibilidad…</div>
+                ) : (
+                  <>
+                    <ConfidenceCards
+                      confidenceTable={confidenceTable}
+                      horizon={horizon}
+                      V0={V0_eff}
+                      currentWithdrawalPct={withdrawalPct}
+                      onApply={(w) => {
+                        setWithdrawalPct(w);
+                        setTimeout(() => runPledge(), 60);
+                      }}
+                    />
+
+                    <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 22, marginBottom: 8 }}>
+                      Tabla de sensibilidad · retiro % vs nivel de confianza
+                    </h4>
+                    <p style={{ fontSize: 11.5, color: "var(--ink-muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
+                      Click en cualquier fila para aplicar ese retiro. Las columnas <strong>99% / 95% / 90%</strong> indican
+                      si ese retiro cumple cada nivel de confianza. <strong>Net p10/p50/p90</strong> es tu patrimonio neto
+                      a <strong>{horizon} años</strong> en escenario pesimista / mediano / optimista.
+                    </p>
+                    <ConfidenceSensitivityTable
+                      confidenceTable={confidenceTable}
+                      horizon={horizon}
+                      V0={V0_eff}
+                      currentWithdrawalPct={withdrawalPct}
+                      onApply={(w) => {
+                        setWithdrawalPct(w);
+                        setTimeout(() => runPledge(), 60);
+                      }}
+                    />
+                  </>
+                )}
+              </div>
+
+              {/* ====== SECCIÓN: Impacto sobre tu patrimonio ====== */}
+              <h3 style={styles.h3}>Impacto de tu retiro actual · año por año</h3>
+              <p style={styles.intro}>
+                Con el retiro actual de <strong>{fmtPct(withdrawalPct, 2)}</strong> sobre {fmtUsd(V0_eff)} inicial, esto es lo
+                que pasa cada año hasta <strong>año {horizon}</strong>. La columna <strong>USD/mes promedio</strong> es el
+                retiro anual mediano dividido entre 12 (en modo endowment el monto fluctúa con la cartera, así que es un promedio).
+                <strong> Patrimonio neto</strong> = valor cartera − préstamo pendiente al cierre de cada año (mediana sobre 3000 paths).
+              </p>
+              <MonthlyImpactTable pledgeResult={pledgeResult} T={horizon} V0={V0_eff} />
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: 14,
+                marginTop: 14,
+              }}>
+                <PignCard
+                  title={`Total retirado al año ${horizon}`}
+                  value={fmtUsd(pledgeResult.totalCashWithdrawn)}
+                  subValue={`≈ ${fmtUsd(pledgeResult.totalCashWithdrawn / (horizon * 12))}/mes promedio del periodo`}
+                  caption={`Suma de los ${horizon} retiros anuales (mediana sobre los paths)`}
+                  sub={`Costo financiero de los intereses: ${fmtUsd(pledgeResult.totalInterest)}`}
+                />
+                <PignCard
+                  title={`Patrimonio neto final · año ${horizon}`}
+                  value={fmtUsd(pledgeResult.netPatrimony_p50)}
+                  subValue={`p10 ${fmtUsd(pledgeResult.netPatrimony_p10)} · p90 ${fmtUsd(pledgeResult.netPatrimony_p90)}`}
+                  color={pledgeResult.netPatrimony_p50 > V0_eff ? "var(--positive)" : pledgeResult.netPatrimony_p50 > 0 ? "var(--ink)" : "var(--negative)"}
+                  caption={`Valor cartera − préstamo, mediana sobre 3000 paths`}
+                  sub={`Sobre tu capital inicial de ${fmtUsd(V0_eff)}`}
+                />
+                <PignCard
+                  title="P(margin call)"
+                  value={fmtPct(pledgeResult.mcProb, 1)}
+                  color={pledgeResult.mcProb < 0.05 ? "var(--positive)" : pledgeResult.mcProb < 0.10 ? "var(--gold)" : "var(--negative)"}
+                  caption={`Confianza realizada: ${fmtPct(1 - pledgeResult.mcProb, 1)}`}
+                  sub={pledgeResult.avgMCTime !== null ? `Si ocurre, en promedio año ${pledgeResult.avgMCTime.toFixed(1)}` : "Margin call no observado en la simulación"}
+                />
               </div>
 
               {/* ============ Panel: 5 escenarios de retiro endowment ============ */}
@@ -4188,7 +4412,7 @@ export default function Calculadora() {
                   <div style={styles.projectionSub}>
                     Sobre <strong>{fmtUsd(10000)}</strong> inicial · pignoración LTV {fmtPct(ltv0,0)} ·
                     retiro endowment {fmtPct(withdrawalPct, 2)} sobre V_t con multiplicador asimétrico.
-                    Para extender más allá de {pledgeHorizon} años, sube el slider de horizonte arriba.
+                    Para extender más allá de {horizon} años, sube el slider de horizonte arriba.
                   </div>
                   <div style={styles.projectionTableWrap}>
                     <table style={styles.projectionTable}>
@@ -4204,7 +4428,7 @@ export default function Calculadora() {
                         </tr>
                       </thead>
                       <tbody>
-                        {[3, 5, 7, 10, 15, 20, 25, 30, 35, 40].filter(y => y <= pledgeHorizon).map(y => {
+                        {[3, 5, 7, 10, 15, 20, 25, 30, 35, 40].filter(y => y <= horizon).map(y => {
                           const stat = pledgeResult.yearStats[y];
                           if (!stat) return null;
                           const net_p10 = stat.v_p10 - stat.loan_p90;
@@ -4236,7 +4460,7 @@ export default function Calculadora() {
                     Si en lugar de pignorar dejaras los <strong>{fmtUsd(10000)}</strong> en Plazo Fijo PEN
                     al <strong>{fmtPct(pfBenchmark.pfRatePreTax, 2)}</strong> bruto
                     ({fmtPct(pfBenchmark.pfRateNet, 2)} neto post-tax {fmtPct(taxPEN, 0)})
-                    y retiraras los mismos <strong>{fmtUsd(pledgeResult.W)}/año</strong> durante {pledgeHorizon} años,
+                    y retiraras los mismos <strong>{fmtUsd(pledgeResult.W)}/año</strong> durante {horizon} años,
                     el resultado sería determinístico (sin riesgo de margin call ni de mercado). Este es tu <strong>piso de cero riesgo</strong>.
                   </p>
                   <div style={{
@@ -4297,7 +4521,7 @@ export default function Calculadora() {
                       value={(pfBenchmark.excessCAGR >= 0 ? "+" : "") + fmtPct(pfBenchmark.excessCAGR, 2)}
                       color={pfBenchmark.excessCAGR > 0 ? "var(--positive)" : "var(--negative)"}
                       caption={`CAGR equivalente pignoración: ${fmtPct(pfBenchmark.equivRate, 2)} · PF: ${fmtPct(pfBenchmark.pfRateNet, 2)}`}
-                      sub={`Lo que ganas extra por año, anualizado al horizonte ${pledgeHorizon}a`}
+                      sub={`Lo que ganas extra por año, anualizado al horizonte ${horizon}a`}
                     />
                     <PignCard
                       title="Volatilidad asignada"
@@ -4331,7 +4555,7 @@ export default function Calculadora() {
                       <p style={styles.distribIntro}>
                         Repetimos el análisis para horizontes de 5 a 30 años. Cada punto del gráfico es una simulación
                         completa con 1.500 paths. Buscamos el <strong>horizonte que maximiza el Sharpe del esfuerzo</strong> —
-                        ahí está el sweet spot. La línea roja vertical marca el horizonte actual ({pledgeHorizon} años).
+                        ahí está el sweet spot. La línea roja vertical marca el horizonte actual ({horizon} años).
                       </p>
                       <div style={{ marginTop: 4, marginBottom: 14, padding: "12px 18px", background: "var(--surface-2)", border: "1px solid var(--gold)", borderRadius: 2 }}>
                         <strong style={{ color: "var(--gold)" }}>★ Horizonte óptimo: {pledgeResult.horizonSweep.optimalHorizon.T} años</strong>
@@ -4396,10 +4620,10 @@ export default function Calculadora() {
                               isAnimationActive={false}
                             />
                             <ReferenceLine
-                              x={pledgeHorizon}
+                              x={horizon}
                               stroke="var(--negative)"
                               strokeDasharray="3 3"
-                              label={{ value: `actual (${pledgeHorizon}a)`, position: "top", fontSize: 10, fill: "var(--negative)" }}
+                              label={{ value: `actual (${horizon}a)`, position: "top", fontSize: 10, fill: "var(--negative)" }}
                               yAxisId="sharpe"
                             />
                             <ReferenceLine
@@ -4445,7 +4669,7 @@ export default function Calculadora() {
                               isAnimationActive={false}
                             />
                             <ReferenceLine
-                              x={pledgeHorizon}
+                              x={horizon}
                               stroke="var(--negative)"
                               strokeDasharray="3 3"
                             />
@@ -4461,7 +4685,7 @@ export default function Calculadora() {
               <h3 style={styles.h3}>Sensibilidad: ¿cuánto puedo retirar al año?</h3>
               <p style={styles.distribIntro}>
                 Manteniendo todo lo demás constante (LTV inicial <strong>{fmtPct(ltv0, 0)}</strong>, tasa <strong>{fmtPct(intRate, 2)}</strong>,
-                umbral <strong>{fmtPct(marginCallLTV, 0)}</strong>, horizonte <strong>{pledgeHorizon} años</strong>), esta curva muestra
+                umbral <strong>{fmtPct(marginCallLTV, 0)}</strong>, horizonte <strong>{horizon} años</strong>), esta curva muestra
                 cómo crece la probabilidad de margin call a medida que aumentas el retiro anual.
               </p>
               <div style={styles.chartWrap}>
@@ -4821,7 +5045,7 @@ export default function Calculadora() {
                     {heatmapResult && (
                       <>
                         <p style={styles.distribIntro}>
-                          Cada celda muestra P(margin call) a {pledgeHorizon} años para esa combinación de LTV inicial (filas) y retiro anual (columnas),
+                          Cada celda muestra P(margin call) a {horizon} años para esa combinación de LTV inicial (filas) y retiro anual (columnas),
                           con tasa <strong>{fmtPct(intRate, 2)}</strong> y umbral <strong>{fmtPct(marginCallLTV, 0)}</strong>.
                           Verde es zona segura, dorado advertencia, rojo no viable.
                         </p>
@@ -6158,6 +6382,240 @@ function PignCard({ title, value, subValue, color, caption, sub }) {
         {caption && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.5 }}>{caption}</div>}
         {sub && <div style={{ fontSize: 10.5, color: "var(--ink-muted)", marginTop: 4, fontStyle: "italic" }}>{sub}</div>}
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// CONFIDENCE CARDS — 3 cards prominentes con retiro máximo a 99/95/90% conf.
+// Cada card muestra: % retiro, USD/año, USD/mes promedio, patrimonio neto p50
+// al horizonte, y botón "Aplicar este retiro" que setea withdrawalPct y corre
+// la simulación principal con ese valor.
+// ============================================================
+function ConfidenceCards({ confidenceTable, horizon, V0, onApply, currentWithdrawalPct }) {
+  if (!confidenceTable) return null;
+  const items = [
+    { key: "99", label: "99% confianza", desc: "P(margin call) ≤ 1%", row: confidenceTable.max99, color: "var(--positive)", tone: "Muy conservador" },
+    { key: "95", label: "95% confianza", desc: "P(margin call) ≤ 5%", row: confidenceTable.max95, color: "var(--gold)",     tone: "Conservador estándar" },
+    { key: "90", label: "90% confianza", desc: "P(margin call) ≤ 10%", row: confidenceTable.max90, color: "#c97a2e",         tone: "Moderado" },
+  ];
+  return (
+    <div style={styles.confidenceCardsGrid}>
+      {items.map(it => {
+        if (!it.row) {
+          return (
+            <div key={it.key} style={{ ...styles.confidenceCard, borderColor: "var(--border)" }}>
+              <div style={styles.confidenceCardHeader}>
+                <div style={{ ...styles.confidenceCardLabel, color: it.color }}>{it.label}</div>
+                <div style={styles.confidenceCardDesc}>{it.desc}</div>
+              </div>
+              <div style={styles.confidenceCardInfeasible}>
+                Ni siquiera 0.5%/año cumple esta confianza con los parámetros actuales. Reduce LTV inicial, sube el umbral, o ajusta la cartera.
+              </div>
+            </div>
+          );
+        }
+        const r = it.row;
+        const isCurrent = Math.abs(r.wPct - currentWithdrawalPct) < 1e-6;
+        return (
+          <div key={it.key} style={{
+            ...styles.confidenceCard,
+            borderColor: it.color,
+            ...(isCurrent ? styles.confidenceCardSelected : {}),
+          }}>
+            <div style={styles.confidenceCardHeader}>
+              <div style={{ ...styles.confidenceCardLabel, color: it.color }}>{it.label}</div>
+              <div style={styles.confidenceCardDesc}>{it.desc} · {it.tone}</div>
+            </div>
+            <div style={styles.confidenceCardMainNumber}>
+              <span style={{ color: it.color }}>{fmtPct(r.wPct, 2)}</span>
+              <span style={styles.confidenceCardMainSub}>al año</span>
+            </div>
+            <div style={styles.confidenceCardMetrics}>
+              <div>
+                <div style={styles.confidenceCardMetricLabel}>USD/año (sobre {fmtUsd(V0)})</div>
+                <div style={styles.confidenceCardMetricValue}>{fmtUsd(r.W_year)}</div>
+              </div>
+              <div>
+                <div style={styles.confidenceCardMetricLabel}>USD/mes promedio</div>
+                <div style={styles.confidenceCardMetricValue}>{fmtUsd(r.W_month)}</div>
+              </div>
+              <div>
+                <div style={styles.confidenceCardMetricLabel}>Patrimonio neto a {horizon}a (p50)</div>
+                <div style={{
+                  ...styles.confidenceCardMetricValue,
+                  color: r.netFinal_p50 >= V0 ? "var(--positive)" : r.netFinal_p50 >= 0 ? "var(--ink)" : "var(--negative)",
+                }}>{fmtUsd(r.netFinal_p50)}</div>
+              </div>
+            </div>
+            <button
+              onClick={() => onApply(r.wPct)}
+              style={{
+                ...styles.loadBtn,
+                background: isCurrent ? "var(--ink-muted)" : it.color,
+                cursor: isCurrent ? "default" : "pointer",
+              }}
+              disabled={isCurrent}
+            >
+              {isCurrent ? "✓ Activo" : "Elegir este retiro →"}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// CONFIDENCE SENSITIVITY TABLE — para cada nivel de retiro en la grilla,
+// muestra: %, USD/año, USD/mes, confianza realizada, ✓ a 90/95/99%,
+// y patrimonio neto al horizonte (p10/p50/p90). El usuario puede clickear
+// cualquier fila para aplicar ese retiro.
+// ============================================================
+function ConfidenceSensitivityTable({ confidenceTable, horizon, V0, onApply, currentWithdrawalPct }) {
+  if (!confidenceTable) return null;
+  return (
+    <div style={styles.sensitivityTableWrap}>
+      <table style={styles.sensitivityTable}>
+        <thead>
+          <tr>
+            <th style={{ ...styles.sensTh, textAlign: "left" }}>Retiro %</th>
+            <th style={styles.sensTh}>USD/año</th>
+            <th style={styles.sensTh}>USD/mes</th>
+            <th style={styles.sensTh}>Confianza<br/>realizada</th>
+            <th style={styles.sensTh}>99%</th>
+            <th style={styles.sensTh}>95%</th>
+            <th style={styles.sensTh}>90%</th>
+            <th style={styles.sensTh}>Net p10</th>
+            <th style={styles.sensTh}>Net p50</th>
+            <th style={styles.sensTh}>Net p90</th>
+            <th style={styles.sensTh}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {confidenceTable.rows.map((r) => {
+            const isCurrent = Math.abs(r.wPct - currentWithdrawalPct) < 1e-6;
+            // Color de la fila según el mejor nivel que cumple
+            const tier = r.passes99 ? "positive" : r.passes95 ? "gold" : r.passes90 ? "warn" : "neg";
+            const tierBg =
+              tier === "positive" ? "rgba(45, 94, 58, 0.06)" :
+              tier === "gold"     ? "rgba(184, 146, 58, 0.07)" :
+              tier === "warn"     ? "rgba(201, 122, 46, 0.08)" :
+                                    "rgba(139, 44, 44, 0.06)";
+            return (
+              <tr
+                key={r.wPct}
+                style={{
+                  background: isCurrent ? "var(--surface-2)" : tierBg,
+                  outline: isCurrent ? "2px solid var(--ink)" : "none",
+                  cursor: "pointer",
+                }}
+                onClick={() => onApply(r.wPct)}
+              >
+                <td style={{ ...styles.sensTd, textAlign: "left", fontWeight: 600 }}>
+                  {fmtPct(r.wPct, 2)}
+                  {isCurrent && <span style={styles.sensCurrentBadge}>actual</span>}
+                </td>
+                <td style={styles.sensTd}>{fmtUsd(r.W_year)}</td>
+                <td style={styles.sensTd}>{fmtUsd(r.W_month)}</td>
+                <td style={{ ...styles.sensTd, fontWeight: 600 }}>{fmtPct(r.confidence, 1)}</td>
+                <td style={{ ...styles.sensTd, color: r.passes99 ? "var(--positive)" : "var(--ink-muted)" }}>
+                  {r.passes99 ? "✓" : "—"}
+                </td>
+                <td style={{ ...styles.sensTd, color: r.passes95 ? "var(--positive)" : "var(--ink-muted)" }}>
+                  {r.passes95 ? "✓" : "—"}
+                </td>
+                <td style={{ ...styles.sensTd, color: r.passes90 ? "var(--positive)" : "var(--ink-muted)" }}>
+                  {r.passes90 ? "✓" : "—"}
+                </td>
+                <td style={{ ...styles.sensTd, color: r.netFinal_p10 >= 0 ? "var(--ink-muted)" : "var(--negative)" }}>
+                  {fmtUsd(r.netFinal_p10)}
+                </td>
+                <td style={{
+                  ...styles.sensTd,
+                  fontWeight: 600,
+                  color: r.netFinal_p50 >= V0 ? "var(--positive)" : r.netFinal_p50 >= 0 ? "var(--ink)" : "var(--negative)",
+                }}>
+                  {fmtUsd(r.netFinal_p50)}
+                </td>
+                <td style={{ ...styles.sensTd, color: "var(--positive)" }}>
+                  {fmtUsd(r.netFinal_p90)}
+                </td>
+                <td style={styles.sensTd}>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onApply(r.wPct); }}
+                    style={styles.sensApplyBtn}
+                    disabled={isCurrent}
+                    title={isCurrent ? "Ya activo" : "Aplicar este retiro"}
+                  >
+                    {isCurrent ? "✓" : "→"}
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ============================================================
+// MONTHLY IMPACT TABLE — para el retiro actualmente seleccionado,
+// muestra año por año cuánto retira (mediana), equivalente mensual,
+// total acumulado, y patrimonio neto a fin de año (p50).
+// ============================================================
+function MonthlyImpactTable({ pledgeResult, T, V0 }) {
+  if (!pledgeResult?.yearStats) return null;
+  const stats = pledgeResult.yearStats;
+  // Filas: del año 1 al T (saltamos year 0 que es el estado inicial)
+  const rows = [];
+  let cumWithdrawal = 0;
+  for (let y = 1; y <= T && y < stats.length; y++) {
+    const s = stats[y];
+    const wYear = s.w_p50 || 0;
+    const wMonth = wYear / 12;
+    cumWithdrawal += wYear;
+    const net = (s.v_p50 || 0) - (s.loan_p50 || 0);
+    rows.push({ year: y, wYear, wMonth, cumWithdrawal, net, ltv: s.ltv_p50 });
+  }
+  return (
+    <div style={styles.monthlyImpactWrap}>
+      <table style={styles.monthlyImpactTable}>
+        <thead>
+          <tr>
+            <th style={styles.miTh}>Año</th>
+            <th style={styles.miTh}>USD/año (mediana)</th>
+            <th style={styles.miTh}>USD/mes promedio</th>
+            <th style={styles.miTh}>Total retirado<br/>acumulado</th>
+            <th style={styles.miTh}>LTV mediana</th>
+            <th style={styles.miTh}>Patrimonio neto<br/>fin de año (p50)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.year}>
+              <td style={styles.miTdYear}>Año {r.year}</td>
+              <td style={styles.miTd}>{fmtUsd(r.wYear)}</td>
+              <td style={{ ...styles.miTd, fontWeight: 600, color: "var(--ink)" }}>{fmtUsd(r.wMonth)}</td>
+              <td style={styles.miTd}>{fmtUsd(r.cumWithdrawal)}</td>
+              <td style={{
+                ...styles.miTd,
+                color: r.ltv < 50 ? "var(--positive)" : r.ltv < 60 ? "var(--gold)" : "var(--negative)",
+              }}>
+                {r.ltv.toFixed(1)}%
+              </td>
+              <td style={{
+                ...styles.miTd,
+                fontWeight: 600,
+                color: r.net >= V0 ? "var(--positive)" : r.net >= 0 ? "var(--ink)" : "var(--negative)",
+              }}>
+                {fmtUsd(r.net)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -8302,6 +8760,248 @@ const styles = {
     padding: "18px 22px",
     marginBottom: 14,
     borderRadius: 2,
+  },
+  // Mini-card embebido en el grid de controles que muestra el horizonte tomado de la pestaña III
+  horizonLink: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    background: "var(--surface-2)",
+    border: "1px dashed var(--border-strong)",
+    padding: "8px 12px",
+    borderRadius: 2,
+    justifyContent: "center",
+  },
+  horizonLinkValue: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 22,
+    fontWeight: 600,
+    color: "var(--ink)",
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1,
+  },
+  horizonLinkBtn: {
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--accent)",
+    cursor: "pointer",
+    textAlign: "left",
+    textDecoration: "underline",
+    letterSpacing: "0.04em",
+    marginTop: 2,
+  },
+
+  // ============ CONFIDENCE CARDS (99/95/90%) ============
+  confidenceSection: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderLeft: "3px solid var(--ink)",
+    padding: "20px 22px",
+    margin: "24px 0",
+    borderRadius: 2,
+  },
+  confidenceCardsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: 14,
+    marginTop: 14,
+    marginBottom: 18,
+  },
+  confidenceCard: {
+    background: "var(--surface-2)",
+    border: "2px solid",
+    padding: "16px 18px",
+    borderRadius: 2,
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  confidenceCardSelected: {
+    boxShadow: "0 4px 18px rgba(0,0,0,0.10)",
+    background: "var(--surface)",
+  },
+  confidenceCardHeader: { display: "flex", flexDirection: "column", gap: 2 },
+  confidenceCardLabel: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 19,
+    fontWeight: 600,
+  },
+  confidenceCardDesc: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
+    letterSpacing: "0.04em",
+  },
+  confidenceCardInfeasible: {
+    fontSize: 12,
+    color: "var(--negative)",
+    fontStyle: "italic",
+    lineHeight: 1.5,
+    padding: "12px 0",
+  },
+  confidenceCardMainNumber: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 8,
+    padding: "8px 0",
+    borderTop: "1px solid var(--border)",
+    borderBottom: "1px solid var(--border)",
+    fontFamily: "'Fraunces', serif",
+    fontSize: 38,
+    fontWeight: 700,
+    lineHeight: 1,
+    fontVariantNumeric: "tabular-nums",
+  },
+  confidenceCardMainSub: {
+    fontSize: 12,
+    fontWeight: 500,
+    color: "var(--ink-muted)",
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.04em",
+  },
+  confidenceCardMetrics: {
+    display: "grid",
+    gridTemplateColumns: "1fr",
+    gap: 6,
+  },
+  confidenceCardMetricLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+  },
+  confidenceCardMetricValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 14,
+    fontWeight: 600,
+    color: "var(--ink)",
+    fontVariantNumeric: "tabular-nums",
+  },
+
+  // ============ SENSITIVITY TABLE ============
+  sensitivityTableWrap: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    padding: 0,
+    borderRadius: 2,
+    overflowX: "auto",
+    marginBottom: 24,
+  },
+  sensitivityTable: {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11.5,
+  },
+  sensTh: {
+    textAlign: "right",
+    padding: "10px 12px",
+    fontSize: 10,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    borderBottom: "2px solid var(--ink)",
+    background: "var(--surface-2)",
+    whiteSpace: "nowrap",
+  },
+  sensTd: {
+    textAlign: "right",
+    padding: "8px 12px",
+    fontVariantNumeric: "tabular-nums",
+    color: "var(--ink)",
+    borderBottom: "1px dotted var(--border)",
+  },
+  sensCurrentBadge: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 8.5,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "var(--bg)",
+    background: "var(--ink)",
+    padding: "1px 6px",
+    marginLeft: 8,
+    borderRadius: 2,
+    fontWeight: 600,
+  },
+  sensApplyBtn: {
+    background: "transparent",
+    border: "1px solid var(--border-strong)",
+    padding: "2px 9px",
+    cursor: "pointer",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--ink)",
+    borderRadius: 2,
+    fontWeight: 600,
+  },
+
+  // ============ MONTHLY IMPACT TABLE ============
+  monthlyImpactWrap: {
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    padding: 0,
+    borderRadius: 2,
+    overflowX: "auto",
+    marginBottom: 18,
+  },
+  monthlyImpactTable: {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+  },
+  miTh: {
+    textAlign: "right",
+    padding: "10px 14px",
+    fontSize: 10,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+    borderBottom: "2px solid var(--ink)",
+    background: "var(--surface-2)",
+    whiteSpace: "nowrap",
+  },
+  miTdYear: {
+    textAlign: "left",
+    padding: "8px 14px",
+    fontWeight: 600,
+    color: "var(--ink)",
+    fontFamily: "'Fraunces', serif",
+    fontSize: 13,
+    borderBottom: "1px dotted var(--border)",
+  },
+  miTd: {
+    textAlign: "right",
+    padding: "8px 14px",
+    fontVariantNumeric: "tabular-nums",
+    color: "var(--ink)",
+    borderBottom: "1px dotted var(--border)",
+  },
+
+  // ============ ADVANCED COLLAPSIBLE ============
+  advancedDetails: {
+    marginTop: 30,
+    padding: "0 18px",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    background: "var(--surface-2)",
+  },
+  advancedSummary: {
+    cursor: "pointer",
+    padding: "14px 0",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11.5,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "var(--ink)",
+    fontWeight: 600,
+    listStyle: "none",
   },
   pignTaxRow: {
     display: "flex",

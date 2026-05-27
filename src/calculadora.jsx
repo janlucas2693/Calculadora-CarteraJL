@@ -1172,7 +1172,104 @@ function runMarkowitz(effRet, nSamples = 15000, assets = ASSETS, corr = C) {
   for (let i = 0; i < samples.length; i += stride) {
     chartSamples.push({ x: samples[i].sigma, y: samples[i].mu, sh: samples[i].sharpe });
   }
-  return { samples: chartSamples, conservadora, neutra, agresiva };
+  // SearchPool: todas las samples con weights (para el picker por objetivo).
+  // ~30k portafolios → ~480k floats ≈ 4MB de RAM, perfectamente manejable.
+  // Cada entrada conserva su vector w (16 pesos) + (mu, sigma, sharpe) precomputados.
+  const searchPool = samples;
+
+  // Bounds de la nube: lo que el slider del picker puede targetear.
+  let muMin = Infinity, muMax = -Infinity, sigmaMin = Infinity, sigmaMax = -Infinity;
+  for (const s of samples) {
+    if (s.mu < muMin) muMin = s.mu;
+    if (s.mu > muMax) muMax = s.mu;
+    if (s.sigma < sigmaMin) sigmaMin = s.sigma;
+    if (s.sigma > sigmaMax) sigmaMax = s.sigma;
+  }
+  const bounds = { muMin, muMax, sigmaMin, sigmaMax };
+
+  return { samples: chartSamples, searchPool, bounds, conservadora, neutra, agresiva };
+}
+
+// ============================================================
+// PICKER POR OBJETIVO (constrained optimization)
+// Dado el searchPool (~30k portafolios feasible) y un objetivo del usuario:
+//   - mode "mu":    el usuario fija un retorno mínimo μ_target
+//                   → devolvemos el portafolio con MENOR σ entre los que cumplen
+//                     μ ≥ μ_target (= mismo punto que max Sharpe sobre la frontera).
+//   - mode "sigma": el usuario fija una volatilidad máxima σ_target
+//                   → devolvemos el portafolio con MAYOR μ entre los que cumplen
+//                     σ ≤ σ_target.
+// En ambos modos arrancamos del mejor sample del pool y opcionalmente refinamos
+// con pair-swaps locales (1% de step, hasta 30 iters) para apretar el resultado.
+// El cómputo es O(N) en el pool + refinamiento corto → ~5-20ms total.
+// ============================================================
+function findOptimalForTarget({ searchPool, effRet, assets, corr, mode, target, refine: doRefine = true }) {
+  if (!searchPool || searchPool.length === 0) return null;
+  // 1. Filtrar candidatos que cumplen la restricción
+  const candidates = mode === "mu"
+    ? searchPool.filter(s => s.mu >= target)
+    : searchPool.filter(s => s.sigma <= target);
+  if (candidates.length === 0) return { infeasible: true, mode, target };
+
+  // 2. Mejor sample inicial del pool
+  //    - mode "mu":    min σ (= max Sharpe en la frontera, "menor desv estándar posible")
+  //    - mode "sigma": max μ (= mejor rentabilidad con esa vol como techo)
+  let best;
+  if (mode === "mu") {
+    best = candidates[0];
+    for (const s of candidates) if (s.sigma < best.sigma) best = s;
+  } else {
+    best = candidates[0];
+    for (const s of candidates) if (s.mu > best.mu) best = s;
+  }
+
+  // 3. Refinamiento local: pair-swaps de 1% para mejorar el objetivo respetando la restricción
+  if (!doRefine) {
+    return { w: best.w.slice(), mu: best.mu, sigma: best.sigma, sharpe: (best.mu - RISK_FREE) / Math.max(best.sigma, 1e-9) };
+  }
+  const n = assets.length;
+  let curW = best.w.slice();
+  let curM = portfolioMoments(curW, effRet, assets, corr);
+  const score = (w, m) => {
+    if (mode === "mu") {
+      if (m.mu < target - 1e-9) return Infinity;  // no cumple → descartar
+      return m.sigma;                              // queremos min σ
+    } else {
+      if (m.sigma > target + 1e-9) return Infinity; // no cumple
+      return -m.mu;                                  // queremos max μ → min (-μ)
+    }
+  };
+  let curScore = score(curW, curM);
+  const step = 0.01;
+  for (let iter = 0; iter < 30; iter++) {
+    let improved = false;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        const headroomJ = assets[j].maxW - curW[j];
+        const headroomI = curW[i] - assets[i].minW;
+        const shift = Math.min(step, headroomI, headroomJ);
+        if (shift <= 0) continue;
+        const trial = curW.slice();
+        trial[i] -= shift; trial[j] += shift;
+        const tm = portfolioMoments(trial, effRet, assets, corr);
+        const ts = score(trial, tm);
+        if (ts < curScore - 1e-9) {
+          curW = trial;
+          curM = tm;
+          curScore = ts;
+          improved = true;
+        }
+      }
+    }
+    if (!improved) break;
+  }
+  return {
+    w: curW,
+    mu: curM.mu,
+    sigma: curM.sigma,
+    sharpe: curM.sigma > 0 ? (curM.mu - RISK_FREE) / curM.sigma : 0,
+  };
 }
 
 // ============================================================
@@ -2067,26 +2164,16 @@ export default function Calculadora() {
           asset.yearsAvailable = marketData.meta.years;
         }
       }
-      // BLENDED P/N/O: interpolar consenso → Damodaran en 10y y tomar CAGR
+      // BLENDED P/N/O: interpolar consenso → Damodaran en 10y y tomar CAGR.
+      // PESIM/NEUTRAL/OPTIM son escenarios PROSPECTIVOS (consenso analistas → equilibrio Damodaran).
+      // HIST es un marcador histórico INDEPENDIENTE — vive en su propio eje arriba del bar.
+      // Antes había un "reality override" que forzaba OPTIM=HIST cuando HIST > OPTIM_blended,
+      // pero hacía que ambos marcadores colapsaran (caso CSPX/CNDX/BTC). Eliminado.
       asset.pBlended = blendConsensusDamodaran(asset.consensusLow,  asset.damodaran);
       asset.nBlended = blendConsensusDamodaran(asset.consensusMean, asset.damodaran);
       asset.oBlended = blendConsensusDamodaran(asset.consensusHigh, asset.damodaran);
-      // OVERRIDE por realidad histórica: si la CAGR histórica realizada fue más
-      // extrema que el blended, el histórico manda (sin alteraciones).
-      // - HIST > OPTIM blended → OPTIM = HIST (la realidad superó al optimismo)
-      // - HIST < PESIM blended → PESIM = HIST (la realidad fue peor que el pesimismo)
       asset.pBlendedFromHist = false;
       asset.oBlendedFromHist = false;
-      if (typeof asset.histRet === "number" && isFinite(asset.histRet)) {
-        if (typeof asset.oBlended === "number" && asset.histRet > asset.oBlended) {
-          asset.oBlended = asset.histRet;
-          asset.oBlendedFromHist = true;
-        }
-        if (typeof asset.pBlended === "number" && asset.histRet < asset.pBlended) {
-          asset.pBlended = asset.histRet;
-          asset.pBlendedFromHist = true;
-        }
-      }
       // Override slots editables (idx 3, 4): renombrados a "Activo 1 JL" / "Activo 2 JL"
       if (i === 3) return {
         ...asset,
@@ -2210,8 +2297,16 @@ export default function Calculadora() {
   // Markowitz state — drives the weights
   const [markowitz, setMarkowitz] = useState(null);
   const [markowitzRunning, setMarkowitzRunning] = useState(false);
-  const [activePortfolio, setActivePortfolio] = useState("neutra");  // 'conservadora' | 'neutra' | 'agresiva'
+  const [activePortfolio, setActivePortfolio] = useState("neutra");  // 'conservadora' | 'neutra' | 'agresiva' | 'personalizada'
   const [returnsAtLastOpt, setReturnsAtLastOpt] = useState(null);    // for stale detection
+
+  // ====== PICKER POR OBJETIVO (tab Markowitz) ======
+  // Modo: 'mu' (fijar retorno mínimo) | 'sigma' (fijar volatilidad máxima)
+  // Targets: valores absolutos en decimal (0.08 = 8%). Inicializados al cargar markowitz
+  // a los valores de la cartera Neutra (Max Sharpe).
+  const [targetMode, setTargetMode] = useState("mu");
+  const [targetMu, setTargetMu] = useState(null);
+  const [targetSigma, setTargetSigma] = useState(null);
   // ROBUST OPTIMIZATION (toggle 1 — controla pisos mínimos):
   //   OFF (default): minW = 0 — el optimizador puede descartar activos.
   //   ON: minW = hardcoded (fuerza diversificación mínima por activo).
@@ -2247,16 +2342,48 @@ export default function Calculadora() {
     });
   }, [customReturns, taxUSD, taxPEN]);
 
+  // ====== CARTERA PERSONALIZADA por target ======
+  // Derivada del searchPool (todas las samples) + target actual.
+  // O(N) filter + refinamiento de ~30 iters → ~10-20ms, suficiente para slider en vivo.
+  // Si el target es infeasible, devuelve { infeasible: true }.
+  // NB: tiene que declararse ANTES de `weights` (que la referencia) para evitar
+  // el temporal dead zone de const.
+  const customPortfolio = useMemo(() => {
+    if (!markowitz?.searchPool) return null;
+    const target = targetMode === "mu" ? targetMu : targetSigma;
+    if (target === null || !isFinite(target)) return null;
+    return findOptimalForTarget({
+      searchPool: markowitz.searchPool,
+      effRet: effectiveReturns,
+      assets: effectiveAssetsForOpt,
+      corr: effectiveC,
+      mode: targetMode,
+      target,
+    });
+  }, [markowitz, targetMode, targetMu, targetSigma, effectiveReturns, effectiveAssetsForOpt, effectiveC]);
+
+  // Cuando markowitz termina de correr (o re-corre), inicializa los targets al
+  // punto Neutra (Max Sharpe) para que el picker arranque en un sitio sensato.
+  useEffect(() => {
+    if (!markowitz?.neutra) return;
+    if (targetMu === null)    setTargetMu(markowitz.neutra.mu);
+    if (targetSigma === null) setTargetSigma(markowitz.neutra.sigma);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markowitz]);
+
   // WEIGHTS are derived from the selected Markowitz portfolio
   // Fallback to balanced defaults before first optimization
   const weights = useMemo(() => {
+    if (activePortfolio === "personalizada" && customPortfolio && !customPortfolio.infeasible) {
+      return customPortfolio.w;
+    }
     if (markowitz && markowitz[activePortfolio]) {
       return markowitz[activePortfolio].w;
     }
     const defaults = ASSETS.map(a => a.defW);
     const sum = defaults.reduce((a, b) => a + b, 0);
     return defaults.map(w => w / sum);
-  }, [markowitz, activePortfolio]);
+  }, [markowitz, activePortfolio, customPortfolio]);
 
   // Stale flag: returns changed since last optimization run
   const optStale = useMemo(() => {
@@ -2967,19 +3094,26 @@ export default function Calculadora() {
                   ["conservadora", "Conservadora", "var(--positive)"],
                   ["neutra", "Neutra", "var(--gold)"],
                   ["agresiva", "Agresiva", "var(--accent)"],
-                ].map(([k, label, color]) => (
-                  <button
-                    key={k}
-                    onClick={() => setActivePortfolio(k)}
-                    disabled={!markowitz}
-                    style={{
-                      ...styles.portfolioBtn,
-                      ...(activePortfolio === k ? { ...styles.portfolioBtnActive, background: color, borderColor: color } : {}),
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
+                  ["personalizada", "Personalizada", "#5a3fa0"],
+                ].map(([k, label, color]) => {
+                  const disabled = !markowitz || (k === "personalizada" && (!customPortfolio || customPortfolio.infeasible));
+                  return (
+                    <button
+                      key={k}
+                      onClick={() => setActivePortfolio(k)}
+                      disabled={disabled}
+                      title={k === "personalizada" && disabled
+                        ? "Configurá un objetivo en la pestaña II · Optimización Markowitz"
+                        : undefined}
+                      style={{
+                        ...styles.portfolioBtn,
+                        ...(activePortfolio === k ? { ...styles.portfolioBtnActive, background: color, borderColor: color } : {}),
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -3258,6 +3392,15 @@ export default function Calculadora() {
                       fill="var(--accent)"
                       shape={(props) => <OptimumMarker {...props} color="var(--accent)" label="AGRESIVA" />}
                     />
+                    {/* Punto personalizado: aparece solo cuando hay un customPortfolio feasible */}
+                    {customPortfolio && !customPortfolio.infeasible && (
+                      <Scatter
+                        name="Personalizada (target del usuario)"
+                        data={[{ x: customPortfolio.sigma, y: customPortfolio.mu }]}
+                        fill="#5a3fa0"
+                        shape={(props) => <OptimumMarker {...props} color="#5a3fa0" label="TU OBJETIVO" />}
+                      />
+                    )}
                   </ScatterChart>
                 </ResponsiveContainer>
                 <div style={styles.legend}>
@@ -3265,8 +3408,24 @@ export default function Calculadora() {
                   <span><span style={{...styles.dot, background: "var(--positive)"}}/> Mínima Varianza</span>
                   <span><span style={{...styles.dot, background: "var(--gold)"}}/> Max Sharpe</span>
                   <span><span style={{...styles.dot, background: "var(--accent)"}}/> Máxima Rentabilidad</span>
+                  {customPortfolio && !customPortfolio.infeasible && (
+                    <span><span style={{...styles.dot, background: "#5a3fa0"}}/> Tu objetivo</span>
+                  )}
                 </div>
               </div>
+
+              {/* ====== PICKER POR OBJETIVO ====== */}
+              <TargetPicker
+                markowitz={markowitz}
+                customPortfolio={customPortfolio}
+                targetMode={targetMode}
+                setTargetMode={setTargetMode}
+                targetMu={targetMu}
+                setTargetMu={setTargetMu}
+                targetSigma={targetSigma}
+                setTargetSigma={setTargetSigma}
+                onLoad={() => { setActivePortfolio("personalizada"); setTab("cartera"); }}
+              />
 
               <h3 style={styles.h3}>Comparativa lado a lado</h3>
               <div style={styles.comparisonTable}>
@@ -5433,13 +5592,274 @@ function SliderControl({ label, value, min, max, step, onChange, fmt, hint }) {
   );
 }
 
+// ============================================================
+// TARGET PICKER — Cartera personalizada por objetivo del usuario
+// Muestra dos sliders (μ y σ) sobre la nube de Markowitz. El usuario
+// arrastra uno de los dos y la calculadora encuentra automáticamente
+// el portafolio con mejor Sharpe que cumple ese objetivo:
+//   - Slider μ activo → "quiero al menos X% de retorno" → min σ s.t. μ ≥ X
+//   - Slider σ activo → "tolero hasta X% de vol"        → max μ s.t. σ ≤ X
+// El slider inactivo se sincroniza con el resultado para mostrar el
+// trade-off realizado.
+// ============================================================
+const PURPLE = "#5a3fa0";
+function TargetPicker({ markowitz, customPortfolio, targetMode, setTargetMode, targetMu, setTargetMu, targetSigma, setTargetSigma, onLoad }) {
+  if (!markowitz?.bounds) return null;
+  const { muMin, muMax, sigmaMin, sigmaMax } = markowitz.bounds;
+  // Padding del slider: empezamos un toque más arriba/abajo del mínimo/máximo
+  // de la nube, redondeado a 0.005 para que los marks queden prolijos.
+  const niceFloor = (v) => Math.floor(v * 200) / 200; // floor a 0.005
+  const niceCeil  = (v) => Math.ceil(v * 200) / 200;
+  const muLo = niceFloor(muMin), muHi = niceCeil(muMax);
+  const sgLo = niceFloor(sigmaMin), sgHi = niceCeil(sigmaMax);
+
+  const muSafe = targetMu ?? markowitz.neutra.mu;
+  const sgSafe = targetSigma ?? markowitz.neutra.sigma;
+
+  // Si el modo cambia, sincronizamos el OTRO slider al resultado, para que
+  // refleje el trade-off realizado (e.g. "para μ=8% acabo con σ=5.3%").
+  // Hacemos esto vía useEffect dentro del componente: cuando customPortfolio
+  // cambia, el slider pasivo se actualiza.
+  useEffect(() => {
+    if (!customPortfolio || customPortfolio.infeasible) return;
+    if (targetMode === "mu" && Math.abs(customPortfolio.sigma - sgSafe) > 1e-6) {
+      setTargetSigma(customPortfolio.sigma);
+    } else if (targetMode === "sigma" && Math.abs(customPortfolio.mu - muSafe) > 1e-6) {
+      setTargetMu(customPortfolio.mu);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customPortfolio?.mu, customPortfolio?.sigma, targetMode]);
+
+  const isMu = targetMode === "mu";
+  const isInfeasible = customPortfolio?.infeasible;
+
+  // Top 6 posiciones del portafolio personalizado
+  const ranked = customPortfolio?.w
+    ? customPortfolio.w.map((w, i) => ({ w, asset: ASSETS[i] }))
+        .filter(x => x.w > 0.005)
+        .sort((a, b) => b.w - a.w)
+    : [];
+  const top6 = ranked.slice(0, 6);
+  const restSum = ranked.slice(6).reduce((a, x) => a + x.w, 0);
+
+  // Comparativa contra Neutra (cuál es el costo/beneficio del custom vs el max Sharpe puro)
+  const neutra = markowitz.neutra;
+  const cmp = customPortfolio && !isInfeasible && neutra ? {
+    dMu:     customPortfolio.mu - neutra.mu,
+    dSigma:  customPortfolio.sigma - neutra.sigma,
+    dSharpe: customPortfolio.sharpe - neutra.sharpe,
+  } : null;
+
+  return (
+    <div style={styles.targetPickerWrap}>
+      <div style={styles.targetPickerHeader}>
+        <div>
+          <h3 style={{ ...styles.h3, marginTop: 0, marginBottom: 4 }}>Cartera personalizada por objetivo</h3>
+          <p style={styles.targetPickerIntro}>
+            Movés <strong>uno</strong> de los dos sliders y la calculadora elige automáticamente,
+            sobre la nube de {markowitz.searchPool.length.toLocaleString()} portafolios factibles,
+            el que cumple tu objetivo con el <strong>mejor Sharpe posible</strong>.
+            El otro slider se sincroniza para mostrarte el trade-off.
+          </p>
+        </div>
+      </div>
+
+      {/* Tabs modo */}
+      <div style={styles.targetModeTabs}>
+        <button
+          onClick={() => setTargetMode("mu")}
+          style={{ ...styles.targetModeTab, ...(isMu ? styles.targetModeTabActive : {}) }}
+        >
+          <span style={styles.targetModeTabKey}>μ</span>
+          <span style={styles.targetModeTabLabel}>Fijar retorno mínimo</span>
+          <span style={styles.targetModeTabHint}>→ min σ con μ ≥ target</span>
+        </button>
+        <button
+          onClick={() => setTargetMode("sigma")}
+          style={{ ...styles.targetModeTab, ...(!isMu ? styles.targetModeTabActive : {}) }}
+        >
+          <span style={styles.targetModeTabKey}>σ</span>
+          <span style={styles.targetModeTabLabel}>Fijar volatilidad máxima</span>
+          <span style={styles.targetModeTabHint}>→ max μ con σ ≤ target</span>
+        </button>
+      </div>
+
+      {/* Sliders */}
+      <div style={styles.targetSlidersGrid}>
+        <TargetSlider
+          label="Retorno objetivo (μ)"
+          icon="μ"
+          value={muSafe}
+          min={muLo}
+          max={muHi}
+          step={0.0025}
+          onChange={setTargetMu}
+          active={isMu}
+          activeColor={PURPLE}
+          format={(v) => fmtPct(v, 2)}
+          subLeft={`min cloud ${fmtPct(muLo,1)}`}
+          subRight={`max cloud ${fmtPct(muHi,1)}`}
+        />
+        <TargetSlider
+          label="Volatilidad objetivo (σ)"
+          icon="σ"
+          value={sgSafe}
+          min={sgLo}
+          max={sgHi}
+          step={0.0025}
+          onChange={setTargetSigma}
+          active={!isMu}
+          activeColor={PURPLE}
+          format={(v) => fmtPct(v, 2)}
+          subLeft={`min cloud ${fmtPct(sgLo,1)}`}
+          subRight={`max cloud ${fmtPct(sgHi,1)}`}
+        />
+      </div>
+
+      {/* Resultado */}
+      {isInfeasible ? (
+        <div style={styles.targetInfeasible}>
+          <strong>Objetivo infactible.</strong>{" "}
+          {isMu
+            ? `Ningún portafolio en la nube alcanza μ ≥ ${fmtPct(muSafe, 2)}. Bajá el target o relajá restricciones (toggles de pisos/topes).`
+            : `Ningún portafolio en la nube tiene σ ≤ ${fmtPct(sgSafe, 2)}. Subí el target o relajá restricciones.`}
+        </div>
+      ) : customPortfolio ? (
+        <div style={styles.targetResultCard}>
+          <div style={styles.targetResultTop}>
+            <div>
+              <div style={styles.targetResultLabel}>Mejor Sharpe que cumple tu objetivo</div>
+              <div style={styles.targetResultDesc}>
+                {isMu
+                  ? `Mínima volatilidad con μ ≥ ${fmtPct(muSafe, 2)}`
+                  : `Máximo retorno con σ ≤ ${fmtPct(sgSafe, 2)}`}
+              </div>
+            </div>
+            <button onClick={onLoad} style={{ ...styles.loadBtn, background: PURPLE }}>
+              Cargar en Cartera →
+            </button>
+          </div>
+
+          <div style={styles.targetResultMetrics}>
+            <div style={styles.targetResultMetric}>
+              <div style={styles.targetResultMetricLabel}>Retorno μ</div>
+              <div style={styles.targetResultMetricValue}>{fmtPct(customPortfolio.mu, 2)}</div>
+              {cmp && (
+                <div style={{ ...styles.targetResultMetricDelta, color: cmp.dMu >= 0 ? "var(--positive)" : "var(--negative)" }}>
+                  {cmp.dMu >= 0 ? "+" : ""}{(cmp.dMu * 100).toFixed(2)} pp vs Neutra
+                </div>
+              )}
+            </div>
+            <div style={styles.targetResultMetric}>
+              <div style={styles.targetResultMetricLabel}>Volatilidad σ</div>
+              <div style={styles.targetResultMetricValue}>{fmtPct(customPortfolio.sigma, 2)}</div>
+              {cmp && (
+                <div style={{ ...styles.targetResultMetricDelta, color: cmp.dSigma <= 0 ? "var(--positive)" : "var(--negative)" }}>
+                  {cmp.dSigma >= 0 ? "+" : ""}{(cmp.dSigma * 100).toFixed(2)} pp vs Neutra
+                </div>
+              )}
+            </div>
+            <div style={styles.targetResultMetric}>
+              <div style={styles.targetResultMetricLabel}>Sharpe</div>
+              <div style={{ ...styles.targetResultMetricValue, color: PURPLE }}>
+                {customPortfolio.sharpe.toFixed(3)}
+              </div>
+              {cmp && (
+                <div style={{ ...styles.targetResultMetricDelta, color: cmp.dSharpe >= 0 ? "var(--positive)" : "var(--negative)" }}>
+                  {cmp.dSharpe >= 0 ? "+" : ""}{cmp.dSharpe.toFixed(3)} vs Neutra
+                </div>
+              )}
+            </div>
+          </div>
+
+          {top6.length > 0 && (
+            <div style={styles.targetResultPositions}>
+              <div style={styles.targetResultPositionsLabel}>Composición · top {top6.length} posiciones</div>
+              <div style={styles.targetResultPositionsList}>
+                {top6.map(({ w, asset }) => (
+                  <div key={asset.id} style={styles.targetResultPositionRow}>
+                    <span style={styles.targetResultPositionName}>
+                      <span style={styles.tag}>{asset.cur}</span> {asset.shortName || asset.name}
+                    </span>
+                    <span style={styles.targetResultPositionWeight}>{fmtPct(w, 1)}</span>
+                  </div>
+                ))}
+                {restSum > 0.005 && (
+                  <div style={styles.targetResultPositionRow}>
+                    <span style={{ ...styles.targetResultPositionName, opacity: 0.5, fontStyle: "italic" }}>
+                      + {ranked.length - top6.length} activos más
+                    </span>
+                    <span style={{ ...styles.targetResultPositionWeight, opacity: 0.5 }}>
+                      {fmtPct(restSum, 1)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Slider numérico bonito con label + valor grande + rieles de min/max.
+function TargetSlider({ label, icon, value, min, max, step, onChange, active, activeColor, format, subLeft, subRight }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  const handlePointerDown = () => {
+    // Al tocar este slider, el padre puede setearlo como activo via onChange's caller
+    // (no hacemos nada acá: el click ya dispara onChange si arrastrás).
+  };
+  return (
+    <div style={{
+      ...styles.targetSliderCard,
+      ...(active ? { borderColor: activeColor, background: "var(--surface)" } : {}),
+    }}>
+      <div style={styles.targetSliderHeader}>
+        <span style={{
+          ...styles.targetSliderIcon,
+          color: active ? activeColor : "var(--ink-muted)",
+          fontWeight: active ? 700 : 500,
+        }}>{icon}</span>
+        <div style={styles.targetSliderLabelGroup}>
+          <span style={styles.targetSliderLabel}>{label}</span>
+          {active && <span style={{ ...styles.targetSliderActiveBadge, color: activeColor, borderColor: activeColor }}>activo</span>}
+        </div>
+        <span style={{ ...styles.targetSliderValue, color: active ? activeColor : "var(--ink)" }}>
+          {format(value)}
+        </span>
+      </div>
+      <div style={styles.targetSliderRailWrap}>
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+          onPointerDown={handlePointerDown}
+          style={{
+            ...styles.targetSliderRange,
+            // Override CSS var via inline accent (the existing global CSS uses var(--accent))
+            // We use accentColor for native thumb tint where supported.
+            accentColor: active ? activeColor : "var(--ink-muted)",
+          }}
+        />
+      </div>
+      <div style={styles.targetSliderFootRow}>
+        <span>{subLeft}</span>
+        <span>{subRight}</span>
+      </div>
+    </div>
+  );
+}
+
 function OptimalPortfolioCard({ label, desc, portfolio, accent, highlight, onLoad }) {
   const accentColor = accent === "positive" ? "var(--positive)" : accent === "gold" ? "var(--gold)" : "var(--accent)";
   // Top 5 assets by weight
   const ranked = portfolio.w.map((w, i) => ({ w, asset: ASSETS[i] }))
     .filter(x => x.w > 0.005)
-    .sort((a, b) => b.w - a.w);
-  const top5 = ranked.slice(0, 5);
+    .sort((a, b) => b.w - a.w);  const top5 = ranked.slice(0, 5);
   return (
     <div style={{
       ...styles.optCard,
@@ -6771,6 +7191,253 @@ const styles = {
     borderRadius: 2,
     marginTop: 4,
   },
+
+  // ============ TARGET PICKER (cartera personalizada por objetivo) ============
+  targetPickerWrap: {
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderLeft: "3px solid #5a3fa0",
+    padding: "22px 24px",
+    margin: "30px 0 26px",
+    borderRadius: 2,
+  },
+  targetPickerHeader: {
+    marginBottom: 16,
+  },
+  targetPickerIntro: {
+    color: "var(--ink-muted)",
+    fontSize: 13,
+    maxWidth: 820,
+    margin: 0,
+    lineHeight: 1.55,
+  },
+  targetModeTabs: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+    marginBottom: 18,
+  },
+  targetModeTab: {
+    background: "var(--surface)",
+    border: "1.5px solid var(--border)",
+    borderRadius: 2,
+    padding: "12px 16px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    transition: "border-color 0.15s, background 0.15s",
+    fontFamily: "'DM Sans', sans-serif",
+    textAlign: "left",
+  },
+  targetModeTabActive: {
+    borderColor: "#5a3fa0",
+    background: "var(--surface-2)",
+    boxShadow: "inset 3px 0 0 #5a3fa0",
+  },
+  targetModeTabKey: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 26,
+    fontWeight: 600,
+    color: "#5a3fa0",
+    lineHeight: 1,
+    width: 28,
+    textAlign: "center",
+  },
+  targetModeTabLabel: {
+    flex: 1,
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: "var(--ink)",
+  },
+  targetModeTabHint: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--ink-muted)",
+    letterSpacing: "0.04em",
+  },
+  targetSlidersGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 14,
+    marginBottom: 18,
+  },
+  targetSliderCard: {
+    background: "var(--surface-2)",
+    border: "1.5px solid var(--border)",
+    padding: "14px 16px 12px",
+    borderRadius: 2,
+    transition: "border-color 0.15s, background 0.15s",
+  },
+  targetSliderHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
+  },
+  targetSliderIcon: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 22,
+    width: 24,
+    textAlign: "center",
+    lineHeight: 1,
+  },
+  targetSliderLabelGroup: {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  targetSliderLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+  },
+  targetSliderActiveBadge: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 8.5,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    padding: "1px 6px",
+    border: "1px solid",
+    borderRadius: 2,
+    fontWeight: 600,
+  },
+  targetSliderValue: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 22,
+    fontWeight: 600,
+    fontVariantNumeric: "tabular-nums",
+  },
+  targetSliderRailWrap: {
+    padding: "4px 0",
+  },
+  targetSliderRange: {
+    width: "100%",
+    cursor: "pointer",
+  },
+  targetSliderFootRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    color: "var(--ink-muted)",
+    letterSpacing: "0.04em",
+    marginTop: 6,
+  },
+  targetInfeasible: {
+    background: "rgba(139, 44, 44, 0.08)",
+    border: "1px solid var(--negative)",
+    borderLeft: "3px solid var(--negative)",
+    padding: "12px 16px",
+    fontSize: 12.5,
+    color: "var(--ink)",
+    lineHeight: 1.5,
+    borderRadius: 2,
+  },
+  targetResultCard: {
+    background: "var(--surface)",
+    border: "1.5px solid #5a3fa0",
+    padding: "18px 20px",
+    borderRadius: 2,
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+  },
+  targetResultTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 14,
+    flexWrap: "wrap",
+  },
+  targetResultLabel: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 18,
+    fontWeight: 600,
+    color: "var(--ink)",
+    lineHeight: 1.2,
+  },
+  targetResultDesc: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    letterSpacing: "0.04em",
+    color: "var(--ink-muted)",
+    marginTop: 4,
+  },
+  targetResultMetrics: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: 16,
+    padding: "12px 0",
+    borderTop: "1px solid var(--border)",
+    borderBottom: "1px solid var(--border)",
+  },
+  targetResultMetric: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+  },
+  targetResultMetricLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+  },
+  targetResultMetricValue: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 26,
+    fontWeight: 600,
+    color: "var(--ink)",
+    fontVariantNumeric: "tabular-nums",
+    lineHeight: 1.1,
+  },
+  targetResultMetricDelta: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    fontWeight: 600,
+    marginTop: 2,
+  },
+  targetResultPositions: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  targetResultPositionsLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    marginBottom: 4,
+  },
+  targetResultPositionsList: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    columnGap: 18,
+    rowGap: 4,
+  },
+  targetResultPositionRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    fontSize: 12,
+    paddingBottom: 3,
+    borderBottom: "1px dotted var(--border)",
+  },
+  targetResultPositionName: {
+    color: "var(--ink)",
+  },
+  targetResultPositionWeight: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontVariantNumeric: "tabular-nums",
+    fontWeight: 600,
+    color: "var(--ink)",
+  },
+
   comparisonTable: {
     marginBottom: 20,
   },

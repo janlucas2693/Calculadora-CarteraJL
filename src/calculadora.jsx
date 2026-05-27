@@ -1022,7 +1022,7 @@ function runWithdrawalSweep({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCal
 // más legible para una tabla de sensibilidad (sin variabilidad por escenario).
 // Devuelve también el retiro MÁXIMO que cumple 99% / 95% / 90% de confianza.
 // ============================================================
-function runConfidenceTable({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCallLTV, N = 1500 }) {
+function runConfidenceTable({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCallLTV, N = 1500, withdrawalMode = "flat" }) {
   // Grid de retiros en dos tramos:
   //   - tramo bajo (0% a 0.5% en pasos de 0.05%) para detectar el punto que cumple 99%
   //     incluso cuando el costo financiero del préstamo ya consume mucho margen
@@ -1035,30 +1035,57 @@ function runConfidenceTable({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCal
   const Loan0 = V0 * ltv0;
   const rows = [];
   for (const wPct of grid) {
-    const W = V0 * wPct;
     let mcCount = 0;
     const netFinal = new Array(N);
+    const wYearActual = new Array(N).fill(0);  // suma de W_t por path (varía en endowment)
     for (let s = 0; s < N; s++) {
       let loan = Loan0;
       let triggered = false;
+      let peak = V0;
+      let V_prev = V0;
+      let wSum = 0;
       for (let t = 1; t <= T; t++) {
-        loan = loan * (1 + intRate) + W;
-        if (!triggered && loan / paths[s][t] > marginCallLTV) {
+        const V_t = paths[s][t];
+        let W_t;
+        if (withdrawalMode === "endowment") {
+          // Clasificar escenario y aplicar multiplicador
+          const dd = V_t / peak - 1;
+          const yoy = V_t / V_prev - 1;
+          const newPeak = V_t >= peak;
+          let mult;
+          if (dd <= -0.25 + 1e-9) mult = 0.80;
+          else if (dd <= -0.10 + 1e-9) mult = 0.90;
+          else if (newPeak && yoy >= 0.20 - 1e-9) mult = 1.20;
+          else if (newPeak && yoy >= 0.05 - 1e-9) mult = 1.10;
+          else mult = 1.00;
+          W_t = wPct * V_t * mult;
+        } else {
+          // Flat: W constante
+          W_t = wPct * V0;
+        }
+        wSum += W_t;
+        loan = loan * (1 + intRate) + W_t;
+        if (!triggered && loan / V_t > marginCallLTV) {
           triggered = true;
           mcCount++;
         }
+        V_prev = V_t;
+        if (V_t > peak) peak = V_t;
       }
       netFinal[s] = paths[s][T] - loan;
+      wYearActual[s] = wSum / T;  // promedio anual realizado
     }
     netFinal.sort((a, b) => a - b);
+    wYearActual.sort((a, b) => a - b);
+    const wAvg_p50 = wYearActual[Math.floor(N * 0.50)];
     const p10 = netFinal[Math.floor(N * 0.10)];
     const p50 = netFinal[Math.floor(N * 0.50)];
     const p90 = netFinal[Math.floor(N * 0.90)];
     const mcProb = mcCount / N;
     rows.push({
       wPct,
-      W_year: W,
-      W_month: W / 12,
+      W_year: wAvg_p50,            // retiro anual mediano (en flat = wPct·V0, en endow varía)
+      W_month: wAvg_p50 / 12,
       mcProb,
       confidence: 1 - mcProb,
       passes99: mcProb <= 0.01,
@@ -1081,6 +1108,7 @@ function runConfidenceTable({ mu, sigma, T, V0 = 10000, ltv0, intRate, marginCal
   };
   return {
     rows,
+    mode: withdrawalMode,
     max99: maxAt(0.01),  // 99% confianza → P(MC) ≤ 1%
     max95: maxAt(0.05),  // 95% confianza → P(MC) ≤ 5%
     max90: maxAt(0.10),  // 90% confianza → P(MC) ≤ 10%
@@ -1117,6 +1145,271 @@ function runHeatmap({ mu, sigma, T, V0 = 10000, intRate, marginCallLTV, N = 800 
     grid.push(row);
   }
   return { grid, ltvValues, withdrawalValues };
+}
+
+// ============================================================
+// LEVERAGED SIM v2 — modelo "apalancamiento + cash account"
+// El usuario aporta V_propio. Se pide préstamo L_0 = leverage × V_propio
+// y se invierte TODO en la cartera: V_invertido_0 = V_propio × (1 + leverage).
+// Una cuenta cash separada (yield = cashRate) recibe dividendos/cupones y paga
+// intereses del préstamo + retiros al usuario.
+//
+// Mecánica anual (paso t → t+1):
+//   1. V_{t+1} = V_t × exp((μ_price − σ²/2) + σ·Z)           ← price-only growth
+//      donde μ_price = μ_total − dividendYield
+//   2. D_{t+1} = V_t × dividendYield                          ← dividendos del año
+//   3. C_intermedio = C_t × (1 + cashRate) + D_{t+1} − L_t × intRate
+//   4. NW_{t+1} = V_{t+1} + C_intermedio − L_t                ← patrimonio neto
+//   5. W_{t+1} = wPctNet × NW_{t+1}                           ← retiro anual
+//   6. C_intermedio −= W_{t+1}
+//   7. Si C_intermedio < 0:                                   ← cash insuficiente
+//        L_{t+1} = L_t + |C_intermedio|, C_{t+1} = 0
+//      else:
+//        L_{t+1} = L_t, C_{t+1} = C_intermedio
+//   8. Margin call si L_{t+1} / V_{t+1} > maintenanceLTV
+//
+// NOTA sobre LTV: aquí leverage = L_0 / V_propio (convención apalancamiento, no L/V).
+// "Leverage 30%" → cartera 1.3× del capital propio.
+// ============================================================
+function runLeveragedSim({
+  mu, sigma, T, V0Propio = 10000,
+  leverage = 0.30, intRate = 0.045,
+  dividendYield = 0.02, cashRate = 0.05,
+  maintenanceLTV = 0.70,
+  wPctNet = 0.04,
+  dcaMonthly = 0,
+  N = 3000,
+}) {
+  // Estado inicial
+  const L0 = leverage * V0Propio;
+  const V0 = V0Propio * (1 + leverage);
+  // Aporte DCA anual (aproximamos como depósito a fin de año) — el aporte va
+  // directo a la cartera V como capital propio nuevo. No incrementa el préstamo
+  // y por lo tanto el LTV baja con cada aporte (apalancamiento se diluye).
+  const dcaAnnual = (dcaMonthly || 0) * 12;
+  // Price growth: total return minus dividend yield
+  // (los dividendos salen de la cartera y van al cash, no se reinvierten en V)
+  const muPrice = mu - dividendYield;
+  const drift = muPrice - 0.5 * sigma * sigma;
+  const diff = sigma;
+
+  // Box–Muller pair-cached
+  let _spare = null;
+  function randn() {
+    if (_spare !== null) { const r = _spare; _spare = null; return r; }
+    let u = 0, v = 0;
+    while (u === 0) u = Math.random();
+    while (v === 0) v = Math.random();
+    const mag = Math.sqrt(-2 * Math.log(u));
+    _spare = mag * Math.sin(2 * Math.PI * v);
+    return mag * Math.cos(2 * Math.PI * v);
+  }
+
+  // Per-year accumulators for percentile stats
+  const V_t = Array.from({ length: T + 1 }, () => new Array(N));
+  const C_t = Array.from({ length: T + 1 }, () => new Array(N));
+  const L_t = Array.from({ length: T + 1 }, () => new Array(N));
+  const NW_t = Array.from({ length: T + 1 }, () => new Array(N));
+  const W_t = Array.from({ length: T + 1 }, () => new Array(N));
+  const LTV_t = Array.from({ length: T + 1 }, () => new Array(N));
+
+  let mcCount = 0;
+  const mcYears = [];
+
+  for (let s = 0; s < N; s++) {
+    let V = V0, C = 0, L = L0;
+    V_t[0][s] = V; C_t[0][s] = C; L_t[0][s] = L;
+    NW_t[0][s] = V + C - L;
+    W_t[0][s] = 0;
+    LTV_t[0][s] = L / V;
+    let mcTriggered = false;
+    let mcAt = -1;
+    for (let t = 1; t <= T; t++) {
+      const Z = randn();
+      // Cartera: crece por price return y luego recibe el aporte DCA del año
+      const V_new = V * Math.exp(drift + diff * Z) + dcaAnnual;
+      // Dividendos del año: calculados sobre el valor V de inicio (antes de growth y DCA)
+      const D = V * dividendYield;
+      const I = L * intRate;
+      let Cmid = C * (1 + cashRate) + D - I;
+      const NW = V_new + Cmid - L;
+      const W = Math.max(0, wPctNet * NW);
+      Cmid -= W;
+      let L_new = L, C_new;
+      if (Cmid < 0) {
+        L_new = L + (-Cmid);
+        C_new = 0;
+      } else {
+        C_new = Cmid;
+      }
+      V = V_new; C = C_new; L = L_new;
+      V_t[t][s] = V; C_t[t][s] = C; L_t[t][s] = L;
+      NW_t[t][s] = V + C - L;
+      W_t[t][s] = W;
+      LTV_t[t][s] = V > 0 ? L / V : Infinity;
+      if (!mcTriggered && L / V > maintenanceLTV) {
+        mcTriggered = true;
+        mcAt = t;
+      }
+    }
+    if (mcTriggered) { mcCount++; mcYears.push(mcAt); }
+  }
+
+  function percentiles(arr, ps = [0.10, 0.50, 0.90]) {
+    const sorted = arr.slice().sort((a, b) => a - b);
+    return ps.map(p => sorted[Math.floor(sorted.length * p)]);
+  }
+  function meanStd(arr) {
+    let m = 0;
+    for (const x of arr) m += x;
+    m /= arr.length;
+    let v = 0;
+    for (const x of arr) { const d = x - m; v += d * d; }
+    return { mean: m, std: Math.sqrt(v / arr.length) };
+  }
+
+  // Stats per year (mediana + p10/p90 + media + std para Bollinger)
+  const yearStats = [];
+  for (let t = 0; t <= T; t++) {
+    const [v10, v50, v90] = percentiles(V_t[t]);
+    const [c10, c50, c90] = percentiles(C_t[t]);
+    const [l10, l50, l90] = percentiles(L_t[t]);
+    const [nw10, nw50, nw90] = percentiles(NW_t[t]);
+    const [w10, w50, w90] = percentiles(W_t[t]);
+    const [ltv10, ltv50, ltv90] = percentiles(LTV_t[t]);
+    const { mean: nwMean, std: nwStd } = meanStd(NW_t[t]);
+    yearStats.push({
+      year: t,
+      v_p10: v10, v_p50: v50, v_p90: v90,
+      c_p10: c10, c_p50: c50, c_p90: c90,
+      l_p10: l10, l_p50: l50, l_p90: l90,
+      nw_p10: nw10, nw_p50: nw50, nw_p90: nw90,
+      nw_mean: nwMean, nw_std: nwStd,
+      nw_upper2s: nwMean + 2 * nwStd,
+      nw_lower2s: nwMean - 2 * nwStd,
+      w_p10: w10, w_p50: w50, w_p90: w90,
+      ltv_p10: ltv10 * 100, ltv_p50: ltv50 * 100, ltv_p90: ltv90 * 100,
+    });
+  }
+
+  // Final summary
+  const [nw10F, nw50F, nw90F] = percentiles(NW_t[T]);
+  const [v10F, v50F, v90F] = percentiles(V_t[T]);
+  const [l10F, l50F, l90F] = percentiles(L_t[T]);
+
+  // Retiro promedio anual por path
+  const avgW = new Array(N);
+  for (let s = 0; s < N; s++) {
+    let sum = 0;
+    for (let t = 1; t <= T; t++) sum += W_t[t][s];
+    avgW[s] = sum / T;
+  }
+  const [w10A, w50A, w90A] = percentiles(avgW);
+
+  return {
+    V0Propio, L0, V0,
+    T,
+    mcProb: mcCount / N,
+    avgMCTime: mcYears.length ? mcYears.reduce((a, b) => a + b, 0) / mcYears.length : null,
+    netPatrimony_p10: nw10F, netPatrimony_p50: nw50F, netPatrimony_p90: nw90F,
+    valueFinal_p10: v10F, valueFinal_p50: v50F, valueFinal_p90: v90F,
+    loanFinal_p10: l10F, loanFinal_p50: l50F, loanFinal_p90: l90F,
+    avgWithdrawal_p10: w10A, avgWithdrawal_p50: w50A, avgWithdrawal_p90: w90A,
+    yearStats,
+  };
+}
+
+// ============================================================
+// CONFIDENCE TABLE v2 — barrido de wPctNet (retiro % sobre net worth)
+// vs P(margin call). Encuentra el retiro máximo a 99%, 95%, 90% conf.
+// ============================================================
+function runLeveragedConfidenceTable({
+  mu, sigma, T, V0Propio = 10000,
+  leverage = 0.30, intRate = 0.045,
+  dividendYield = 0.02, cashRate = 0.05,
+  maintenanceLTV = 0.70,
+  dcaMonthly = 0,
+  N = 1500,
+}) {
+  // Grid: dos tramos (fino abajo, paso 0.25% arriba)
+  const grid = [];
+  for (let p = 0;     p <= 0.005 - 1e-9; p += 0.0005) grid.push(Math.round(p * 100000) / 100000);
+  for (let p = 0.005; p <= 0.08  + 1e-9; p += 0.0025) grid.push(Math.round(p * 10000) / 10000);
+
+  const rows = [];
+  for (const wPctNet of grid) {
+    const sim = runLeveragedSim({
+      mu, sigma, T, V0Propio, leverage, intRate,
+      dividendYield, cashRate, maintenanceLTV,
+      wPctNet, dcaMonthly, N,
+    });
+    rows.push({
+      wPctNet,
+      W_year_p50: sim.avgWithdrawal_p50,
+      W_month_p50: sim.avgWithdrawal_p50 / 12,
+      mcProb: sim.mcProb,
+      confidence: 1 - sim.mcProb,
+      passes99: sim.mcProb <= 0.01,
+      passes95: sim.mcProb <= 0.05,
+      passes90: sim.mcProb <= 0.10,
+      netFinal_p10: sim.netPatrimony_p10,
+      netFinal_p50: sim.netPatrimony_p50,
+      netFinal_p90: sim.netPatrimony_p90,
+    });
+  }
+  const maxAt = (threshold) => {
+    let best = null;
+    for (const r of rows) {
+      if (r.mcProb <= threshold) best = r;
+      else break;
+    }
+    return best;
+  };
+  return {
+    rows,
+    max99: maxAt(0.01),
+    max95: maxAt(0.05),
+    max90: maxAt(0.10),
+  };
+}
+
+// ============================================================
+// MARGIN CALL CURVES — para una grilla de retiros (1% a 5% por default),
+// corre simulaciones independientes y devuelve las trayectorias de LTV
+// (mediana + percentiles) y métricas clave por retiro. Esto alimenta el
+// gráfico principal de "¿cuándo toco el umbral?" — muestra visualmente
+// qué retiros son sostenibles y cuáles llegan al margin call y cuándo.
+// ============================================================
+function runMarginCallCurves({
+  mu, sigma, T, V0Propio = 10000,
+  leverage = 0.30, intRate = 0.045,
+  dividendYield = 0.02, cashRate = 0.05,
+  maintenanceLTV = 0.70,
+  dcaMonthly = 0,
+  withdrawalRates = [0.01, 0.02, 0.03, 0.04, 0.05],
+  N = 2000,
+}) {
+  return withdrawalRates.map(rate => {
+    const sim = runLeveragedSim({
+      mu, sigma, T, V0Propio, leverage, intRate,
+      dividendYield, cashRate, maintenanceLTV,
+      wPctNet: rate, dcaMonthly, N,
+    });
+    // Año en que la mediana de LTV cruza el umbral (si lo hace)
+    const mcLTVPct = maintenanceLTV * 100;
+    let crossYear = null;
+    for (let t = 1; t < sim.yearStats.length; t++) {
+      if (sim.yearStats[t].ltv_p50 >= mcLTVPct) { crossYear = t; break; }
+    }
+    return {
+      wPctNet: rate,
+      mcProb: sim.mcProb,
+      crossYearMedian: crossYear,  // año en que LTV mediana toca el umbral, o null
+      yearStats: sim.yearStats,    // para graficar las curvas
+      netFinal_p50: sim.netPatrimony_p50,
+      avgWithdrawal_p50: sim.avgWithdrawal_p50,
+    };
+  });
 }
 
 // ============================================================
@@ -1352,6 +1645,13 @@ function findOptimalForTarget({ searchPool, effRet, assets, corr, mode, target, 
 // ============================================================
 const fmtPct = (x, digits = 2) => (x * 100).toFixed(digits) + "%";
 const fmtUsd = (x) => "$" + Math.round(x).toLocaleString("en-US");
+// Compact USD formatter for chart axes — e.g. $1.5M, $250k
+const fmtUsdCompact = (x) => {
+  const a = Math.abs(x);
+  if (a >= 1e6) return "$" + (x / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M";
+  if (a >= 1e3) return "$" + (x / 1e3).toFixed(0) + "k";
+  return "$" + Math.round(x);
+};
 const fmtUsdK = (x) => "$" + (x / 1000).toFixed(1) + "k";
 
 // ============================================================
@@ -2400,18 +2700,19 @@ export default function Calculadora() {
     return (isFinite(n) && n > 0) ? n : 0;
   }, [dcaMonthly]);
 
-  // Pignoración state (horizonte se reusa desde la pestaña III · horizonte temporal)
-  const [ltv0, setLtv0] = useState(0.30);
+  // Pignoración v2 — modelo apalancamiento + cash account (horizonte = pestaña III)
+  //   leverage:      L_0 / V_propio. "30%" → cartera 1.3× del capital propio
+  //   intRate:       tasa anual del préstamo
+  //   dividendYield: dividend / cupón / interés yield de la cartera
+  //   cashRate:      rendimiento del cash account (recibe dividendos, paga intereses+retiros)
+  //   mcLTV:         umbral de margin call sobre L/V
+  //   wPctNet:       retiro anual como % del patrimonio neto (V + C − L)
+  const [leverage, setLeverage] = useState(0.30);
   const [intRate, setIntRate] = useState(0.045);
-  const [marginCallLTV, setMarginCallLTV] = useState(0.65);
-  const [withdrawalPct, setWithdrawalPct] = useState(0.04); // 4% (regla del 4%)
-  const [compareVsSell, setCompareVsSell] = useState(true);
-  const [taxUSDGains, setTaxUSDGains] = useState(0.30);  // 30% withholding ETFs USA
-  const [taxPENGains, setTaxPENGains] = useState(0.05);  // 5% PEN gains
-  const [mcTolerance, setMcTolerance] = useState(0.05);  // tolerancia P(margin call) para retiro maximo sostenible
-  const [heatmapResult, setHeatmapResult] = useState(null);
-  const [heatmapRunning, setHeatmapRunning] = useState(false);
-  const [heatmapOpen, setHeatmapOpen] = useState(false);
+  const [dividendYield, setDividendYield] = useState(0.02);
+  const [cashRate, setCashRate] = useState(0.05);
+  const [mcLTV, setMcLTV] = useState(0.70);
+  const [wPctNet, setWPctNet] = useState(0.04);
 
   // Markowitz state — drives the weights
   const [markowitz, setMarkowitz] = useState(null);
@@ -2722,183 +3023,46 @@ export default function Calculadora() {
   const runPledge = useCallback(() => {
     setPledgeRunning(true);
     setTimeout(() => {
-      // Full simulation with per-year percentiles
-      const sim = runFullPledgeSim({
-        mu, sigma, T: horizon, V0: V0_eff,
-        ltv0, intRate, marginCallLTV, withdrawalPct, N: 3000,
+      const sim = runLeveragedSim({
+        mu, sigma, T: horizon, V0Propio: V0_eff,
+        leverage, intRate, dividendYield, cashRate,
+        maintenanceLTV: mcLTV, wPctNet, dcaMonthly: dcaMonthly_eff, N: 3000,
       });
-      // Sell alternative (tax cost if selling instead of pledging)
-      const sellAlt = computeSellAlternative({
-        mu, sigma, T: horizon, V0: V0_eff,
-        withdrawalPct, wUSD: usdW, wPEN: penW,
-        taxUSDGains, taxPENGains,
-      });
-      // Withdrawal sweep: P(MC) vs withdrawal % keeping LTV constant
-      const sweep = runWithdrawalSweep({
-        mu, sigma, T: horizon, V0: V0_eff,
-        ltv0, intRate, marginCallLTV, N: 1500,
-      });
-      // Horizon sweep: Sharpe del esfuerzo vs T (busca el horizonte optimo)
-      const pfPreTax = customReturns[PFPEN_IDX] || 0.045;
-      const pfNet = pfPreTax * (1 - taxPEN);
-      const horizonSweep = runHorizonSweep({
-        mu, sigma, ltv0, intRate, marginCallLTV, withdrawalPct,
-        pfRateNet: pfNet, V0: V0_eff, N: 1500,
-      });
-      setPledgeResult({ ...sim, sellAlt, sweep, horizonSweep });
+      setPledgeResult(sim);
       setPledgeRunning(false);
     }, 50);
-  }, [mu, sigma, horizon, ltv0, intRate, marginCallLTV, withdrawalPct, taxUSDGains, taxPENGains, usdW, penW, customReturns, taxPEN, PFPEN_IDX]);
+  }, [mu, sigma, horizon, V0_eff, leverage, intRate, dividendYield, cashRate, mcLTV, wPctNet, dcaMonthly_eff]);
 
   // ===========================================================
-  // Benchmark: PF PEN (Plazo Fijo Peruano sin riesgo) como
-  // umbral de comparacion. Usa la rentabilidad que el usuario
-  // asigno en pestana 1 (customReturns[14] = pfpen) netada de
-  // impuestos PEN, simula la misma anualidad y compara contra
-  // los 3000 paths del netPatrimony de la pignoracion.
-  //
-  // Calcula tambien las metricas del "esfuerzo":
-  //   - excessCAGR: rentabilidad anual extra vs PF (via equiv rate)
-  //   - volEsfuerzo: sigma cartera (toda la vol va al exceso)
-  //   - sharpeEsfuerzo: excessCAGR / sigma (el indicador de oro)
   // ===========================================================
-  const pfBenchmark = useMemo(() => {
-    if (!pledgeResult || !pledgeResult.netPatrimoniesFinal) return null;
-    const pfRatePreTax = customReturns[PFPEN_IDX] || 0;
-    const pfRateNet    = pfRatePreTax * (1 - taxPEN);
-    const T = horizon;
-    const V0 = 10000;
-    const W = V0 * withdrawalPct;
-    const growth = Math.pow(1 + pfRateNet, T);
-    const annuityFactor = Math.abs(pfRateNet) > 1e-9 ? (growth - 1) / pfRateNet : T;
-    const pfFinal = V0 * growth - W * annuityFactor;
-
-    const arr = pledgeResult.netPatrimoniesFinal;
-    let wins = 0;
-    for (let i = 0; i < arr.length; i++) if (arr[i] > pfFinal) wins++;
-    const probBeatPF = wins / arr.length;
-    const sorted = arr.slice().sort((a, b) => a - b);
-    const medianNet = sorted[Math.floor(sorted.length / 2)];
-    const medianSpread = medianNet - pfFinal;
-
-    // Anualizar el resultado de la pignoracion via tasa equivalente
-    const equivRate = solveEquivRate(V0, W, T, medianNet);
-    const excessCAGR = equivRate - pfRateNet;
-    const volEsfuerzo = sigma;
-    const sharpeEsfuerzo = sigma > 0 ? excessCAGR / sigma : 0;
-
-    return {
-      pfRatePreTax, pfRateNet, pfFinal,
-      probBeatPF, medianSpread, medianNet,
-      equivRate, excessCAGR, volEsfuerzo, sharpeEsfuerzo,
-    };
-  }, [pledgeResult, customReturns, taxPEN, horizon, withdrawalPct, PFPEN_IDX, sigma]);
-
-  // ===========================================================
-  // CONFIDENCE TABLE — sweep de retiros (0.5%–5% en pasos de 0.25%)
-  // con P(margin call) y net patrimony al horizonte. Se recompute
-  // automáticamente cuando cambian los parámetros relevantes; se
-  // skip-ea hasta que el usuario haya corrido el Monte Carlo principal
-  // al menos una vez (señal de que está activamente trabajando en este tab).
+  // CONFIDENCE TABLE v2 — barrido de wPctNet con el modelo apalancado.
+  // Se recompute cuando cambian los parámetros del modelo nuevo.
   // ===========================================================
   const confidenceTable = useMemo(() => {
-    if (!pledgeResult) return null;  // espera al primer "Correr Monte Carlo"
-    return runConfidenceTable({
-      mu, sigma, T: horizon, V0: V0_eff,
-      ltv0, intRate, marginCallLTV, N: 1500,
+    if (!pledgeResult) return null;  // espera primer Monte Carlo
+    return runLeveragedConfidenceTable({
+      mu, sigma, T: horizon, V0Propio: V0_eff,
+      leverage, intRate, dividendYield, cashRate,
+      maintenanceLTV: mcLTV, dcaMonthly: dcaMonthly_eff, N: 1500,
     });
-  }, [pledgeResult, mu, sigma, horizon, V0_eff, ltv0, intRate, marginCallLTV]);
+  }, [pledgeResult, mu, sigma, horizon, V0_eff, leverage, intRate, dividendYield, cashRate, mcLTV, dcaMonthly_eff]);
 
   // ===========================================================
-  // Escenario "Retiro maximo sostenible": dado un threshold de
-  // tolerancia P(margin call), encuentra el W maximo del sweep
-  // que cumple, y re-simula la pignoracion con ese retiro para
-  // generar curvas de evolucion (net patrimony, LTV) + metricas
-  // de CAGR comparativas y de salud del apalancamiento.
+  // MARGIN CALL CURVES — para 1/2/3/4/5% de retiro, las trayectorias
+  // de LTV mediana a lo largo del horizonte. Alimenta el gráfico
+  // principal "¿cuándo toco el umbral?".
   // ===========================================================
-  const sustainableScenario = useMemo(() => {
-    if (!pledgeResult?.sweep?.curve) return null;
-    // Encontrar el W maximo donde mcProbPct <= mcTolerance%
-    const targetPct = mcTolerance * 100;
-    const curve = pledgeResult.sweep.curve;
-    let wMaxPct = 0;
-    for (const pt of curve) {
-      if (pt.mcProbPct <= targetPct) wMaxPct = pt.wPctDisplay;
-      else break;  // curva monotonicamente creciente
-    }
-    // Si curva nunca cruza, todo el rango es sostenible — usar el maximo del sweep
-    if (wMaxPct === 0 && curve[0].mcProbPct <= targetPct) {
-      wMaxPct = curve[curve.length - 1].wPctDisplay;
-    }
-    // Si curva ya empieza por encima del threshold incluso a 0%, no hay W sostenible
-    if (wMaxPct === 0) {
-      return { wMaxPct: 0, infeasible: true };
-    }
-    const wMax = wMaxPct / 100;
-    const T = horizon;
-    const V0 = 10000;
-    const W_year = V0 * wMax;
-    // Re-simular con wMax
-    const sim = runFullPledgeSim({
-      mu, sigma, T, V0, ltv0, intRate, marginCallLTV,
-      withdrawalPct: wMax, N: 1500,
+  const marginCallCurves = useMemo(() => {
+    if (!pledgeResult) return null;
+    return runMarginCallCurves({
+      mu, sigma, T: horizon, V0Propio: V0_eff,
+      leverage, intRate, dividendYield, cashRate,
+      maintenanceLTV: mcLTV, dcaMonthly: dcaMonthly_eff,
+      withdrawalRates: [0.01, 0.02, 0.03, 0.04, 0.05],
+      N: 2000,
     });
-    // Metricas de CAGR
-    const finalNet = sim.netPatrimony_p50;
-    const cagrNet = finalNet > 0 ? Math.pow(finalNet / V0, 1 / T) - 1 : -1;
-    const totalWealth = finalNet + W_year * T;
-    const cagrTotalWealth = totalWealth > 0 ? Math.pow(totalWealth / V0, 1 / T) - 1 : -1;
-    // PF PEN y Gross portfolio CAGRs ya disponibles en pfBenchmark / mu
-    const pfRateNet = pfBenchmark ? pfBenchmark.pfRateNet : 0;
-    // Apalancamiento final = finalLoan / V_final_p50 (LTV mediano final)
-    const vFinalP50 = sim.yearStats[T].v_p50;
-    const leverageFinal = vFinalP50 > 0 ? sim.finalLoan / vFinalP50 : 0;
-    // Recovery margin: promedio de (marginCallLTV - ltv_p50/100) en cada año
-    let recoverySum = 0;
-    for (let t = 1; t <= T; t++) {
-      recoverySum += marginCallLTV - sim.yearStats[t].ltv_p50 / 100;
-    }
-    const recoveryMargin = recoverySum / T;
-    // Cash flow yield = W/V0 (es lo mismo que wMax, pero util en cards)
-    const cashFlowYield = wMax;
-    // Datos para el grafico: net patrimony y LTV por año
-    const chartData = sim.yearStats.map(s => ({
-      year: s.year,
-      net_p10: s.v_p10 - s.loan,
-      net_p50: s.v_p50 - s.loan,
-      net_p90: s.v_p90 - s.loan,
-      net_band_base: s.v_p10 - s.loan,
-      net_band_width: (s.v_p90 - s.loan) - (s.v_p10 - s.loan),
-      ltv_p10: s.ltv_p10,
-      ltv_p50: s.ltv_p50,
-      ltv_p90: s.ltv_p90,
-      ltv_band_base: s.ltv_p10,
-      ltv_band_width: s.ltv_p90 - s.ltv_p10,
-      mcLine: marginCallLTV * 100,
-    }));
-    return {
-      wMaxPct, wMax, W_year, T,
-      finalNet, totalWealth,
-      cagrNet, cagrTotalWealth, cagrPF: pfRateNet, cagrGross: mu,
-      leverageFinal, recoveryMargin, cashFlowYield,
-      mcProbActual: sim.mcProb,
-      chartData,
-      infeasible: false,
-    };
-  }, [pledgeResult, mcTolerance, horizon, mu, sigma, ltv0, intRate, marginCallLTV, pfBenchmark]);
+  }, [pledgeResult, mu, sigma, horizon, V0_eff, leverage, intRate, dividendYield, cashRate, mcLTV, dcaMonthly_eff]);
 
-
-  const runHeatmapSim = useCallback(() => {
-    setHeatmapRunning(true);
-    setTimeout(() => {
-      const result = runHeatmap({
-        mu, sigma, T: horizon, V0: V0_eff,
-        intRate, marginCallLTV, N: 800,
-      });
-      setHeatmapResult(result);
-      setHeatmapRunning(false);
-    }, 50);
-  }, [mu, sigma, horizon, intRate, marginCallLTV]);
 
   // Update one weight, optionally rebalancing
   // (Removed: weights are now derived from Markowitz, not user-edited)
@@ -4172,27 +4336,36 @@ export default function Calculadora() {
       {/* ============== TAB: PIGNORACIÓN ============== */}
       {tab === "pignoracion" && (
         <section style={styles.section}>
-          <h2 style={styles.h2}>Pignoración · Renta Vitalicia Tax-Free</h2>
-          <p style={styles.intro}>
-            Pones tu cartera como colateral, tomas un préstamo a tasa fija, y vives del crédito.
-            Como no vendes acciones, no realizas ganancias y por tanto <strong>no pagas impuestos sobre ellas</strong>.
-            El préstamo crece con interés + retiros nuevos. Si LTV (Préstamo / Valor cartera) cruza el umbral del banco → <em>margin call</em> y se liquida.
-          </p>
+          {/* HERO */}
+          <div style={styles.pignHero}>
+            <h2 style={styles.pignHeroTitle}>Pignoración</h2>
+            <p style={styles.pignHeroSub}>
+              Apalancá tu cartera, vivi del crédito. Capital propio + préstamo invertidos juntos,
+              los dividendos pagan los intereses, y un retiro anual sale del patrimonio neto.
+            </p>
+          </div>
 
-          {/* Controles compactos */}
-          <div style={styles.pignControlsGrid}>
-            <SliderControl label="LTV inicial" value={ltv0}
-              min={0.05} max={0.50} step={0.01} onChange={setLtv0}
-              fmt={v => fmtPct(v, 0)} hint="% prestado al inicio" />
+          {/* CONTROLES — fila densa pero limpia */}
+          <div style={styles.pignControlsGridV2}>
+            <SliderControl label="Apalancamiento inicial" value={leverage}
+              min={0} max={1.0} step={0.05} onChange={setLeverage}
+              fmt={v => fmtPct(v, 0)}
+              hint={`cartera ${(1+leverage).toFixed(2)}× capital propio`} />
             <SliderControl label="Tasa préstamo" value={intRate}
-              min={0.03} max={0.06} step={0.0025} onChange={setIntRate}
+              min={0.02} max={0.08} step={0.0025} onChange={setIntRate}
               fmt={v => fmtPct(v, 2)} hint="anual fija" />
-            <SliderControl label="Umbral margin call" value={marginCallLTV}
-              min={0.50} max={0.80} step={0.05} onChange={setMarginCallLTV}
-              fmt={v => fmtPct(v, 0)} hint="LTV máximo del banco" />
-            <SliderControl label="Retiro anual (% capital)" value={withdrawalPct}
-              min={0} max={0.08} step={0.0025} onChange={setWithdrawalPct}
-              fmt={v => fmtPct(v, 2)} hint={`${fmtUsd(10000 * withdrawalPct)} sobre $10k · regla del 4%`} />
+            <SliderControl label="Dividend yield" value={dividendYield}
+              min={0} max={0.06} step={0.0025} onChange={setDividendYield}
+              fmt={v => fmtPct(v, 2)} hint="cupones + dividendos" />
+            <SliderControl label="Yield cash account" value={cashRate}
+              min={0} max={0.08} step={0.0025} onChange={setCashRate}
+              fmt={v => fmtPct(v, 2)} hint="rendimiento de la cuenta" />
+            <SliderControl label="Umbral margin call" value={mcLTV}
+              min={0.50} max={0.85} step={0.05} onChange={setMcLTV}
+              fmt={v => fmtPct(v, 0)} hint="L/V máximo del banco" />
+            <SliderControl label="Retiro anual" value={wPctNet}
+              min={0} max={0.08} step={0.0025} onChange={setWPctNet}
+              fmt={v => fmtPct(v, 2)} hint="% sobre patrimonio neto" />
             <div style={styles.horizonLink}>
               <div style={styles.sliderLabel}>HORIZONTE</div>
               <div style={styles.horizonLinkValue}>{horizon} años</div>
@@ -4202,869 +4375,186 @@ export default function Calculadora() {
             </div>
           </div>
 
-          <div style={styles.pignTaxRow}>
-            <label style={styles.toggleLabel}>
-              <input type="checkbox" checked={compareVsSell}
-                     onChange={e => setCompareVsSell(e.target.checked)} />
-              <span>Comparar vs vender acciones (mostrar ahorro fiscal)</span>
-            </label>
-            {compareVsSell && (
-              <div style={styles.pignTaxInputs}>
-                <SliderControl label="Tax ganancias USD" value={taxUSDGains}
-                  min={0} max={0.45} step={0.01} onChange={setTaxUSDGains}
-                  fmt={v => fmtPct(v, 0)} hint="withholding ETFs USA" />
-                <SliderControl label="Tax ganancias PEN" value={taxPENGains}
-                  min={0} max={0.30} step={0.01} onChange={setTaxPENGains}
-                  fmt={v => fmtPct(v, 0)} hint="rentas de capital Perú" />
-              </div>
-            )}
+          <div style={styles.runRow}>
             <button onClick={runPledge} style={styles.runBtn} disabled={pledgeRunning}>
-              {pledgeRunning ? "Simulando..." : pledgeResult ? "Recalcular" : "Correr Monte Carlo"}
+              {pledgeRunning ? "Simulando..." : pledgeResult ? "↻ Recalcular" : "▶ Correr Monte Carlo"}
             </button>
+            <span style={styles.runHint}>
+              μ <strong>{fmtPct(mu, 2)}</strong> · σ <strong>{fmtPct(sigma, 2)}</strong>
+              {" · "}μ_precio {fmtPct(mu - dividendYield, 2)}
+              {dcaMonthly_eff > 0 && <> · DCA <strong>{fmtUsd(dcaMonthly_eff)}/mes</strong></>}
+              {" · "}3,000 paths MC
+            </span>
           </div>
 
-          {!pledgeResult && !pledgeRunning && (
+          {!pledgeResult ? (
             <div style={styles.placeholder}>
-              Ajusta los parámetros y corre la simulación.
+              Configurá los parámetros arriba y corré la simulación.
             </div>
-          )}
-
-          {pledgeResult && (
+          ) : (
             <>
-              {/* Headline cards */}
-              <div style={{
-                ...styles.btMetricsGrid,
-                gridTemplateColumns: compareVsSell ? "repeat(4, 1fr)" : "repeat(3, 1fr)",
-                marginTop: 22,
-              }}>
-                <PignCard
-                  title="Probabilidad margin call"
-                  value={fmtPct(pledgeResult.mcProb, 1)}
-                  color={pledgeResult.mcProb < 0.05 ? "var(--positive)" : pledgeResult.mcProb < 0.15 ? "var(--gold)" : "var(--negative)"}
-                  caption={
-                    pledgeResult.mcProb < 0.02 ? "Estrategia sostenible · dormís tranquilo" :
-                    pledgeResult.mcProb < 0.05 ? "Riesgo bajo · aceptable" :
-                    pledgeResult.mcProb < 0.15 ? "Riesgo moderado · revisar" :
-                    pledgeResult.mcProb < 0.30 ? "Riesgo alto · ajustar" :
-                    "No es viable"
-                  }
-                  sub={pledgeResult.avgMCTime !== null ? `Si ocurre, en promedio año ${pledgeResult.avgMCTime.toFixed(1)}` : ""}
-                />
-                <PignCard
-                  title={`Total retirado en ${horizon} años (mediana)`}
-                  value={fmtUsd(pledgeResult.totalCashWithdrawn)}
-                  subValue={`+ ${fmtUsd(pledgeResult.totalInterest)} intereses`}
-                  caption={`Retiro target inicial: ${fmtUsd(pledgeResult.W)}/año · varía por escenario (×0.80 a ×1.20)`}
-                  sub={`Costo financiero: ${fmtPct(pledgeResult.totalInterest / pledgeResult.totalCashWithdrawn, 1)} sobre cada dólar retirado`}
-                />
-                <PignCard
-                  title="Patrimonio neto final (mediana)"
-                  value={fmtUsd(pledgeResult.netPatrimony_p50)}
-                  color={pledgeResult.netPatrimony_p50 > 10000 ? "var(--positive)" : "var(--negative)"}
-                  caption={`Rango 80%: ${fmtUsd(pledgeResult.netPatrimony_p10)} — ${fmtUsd(pledgeResult.netPatrimony_p90)}`}
-                  sub={`Capital cartera − préstamo pendiente`}
-                />
-                {compareVsSell && (
-                  <PignCard
-                    title="Ahorro fiscal vs vender"
-                    value={fmtUsd(pledgeResult.sellAlt.totalTax - pledgeResult.totalInterest)}
-                    color={pledgeResult.sellAlt.totalTax - pledgeResult.totalInterest > 0 ? "var(--gold)" : "var(--negative)"}
-                    caption={`tax si vendieras: ${fmtUsd(pledgeResult.sellAlt.totalTax)} vs intereses: ${fmtUsd(pledgeResult.totalInterest)}`}
-                    sub={`tax efectivo ponderado: ${fmtPct(pledgeResult.sellAlt.weightedTax, 0)} (${fmtPct(usdW, 0)} USD / ${fmtPct(penW, 0)} PEN)`}
-                  />
-                )}
-              </div>
-
-              {/* ====== SECCIÓN PRINCIPAL: ¿Cuánto puedo retirar? ====== */}
-              <div style={styles.confidenceSection}>
-                <h3 style={{ ...styles.h3, margin: 0 }}>¿Cuánto puedo retirar al año sin caer en margin call?</h3>
-                <p style={{ ...styles.intro, marginTop: 6, marginBottom: 10 }}>
-                  Para cada nivel de confianza, el retiro máximo que mantiene la probabilidad de margin call debajo del umbral
-                  (sobre <strong>{fmtUsd(V0_eff)}</strong> inicial, a <strong>{horizon} años</strong>, LTV inicial {fmtPct(ltv0, 0)},
-                  tasa {fmtPct(intRate, 2)}, umbral MC {fmtPct(marginCallLTV, 0)}). El retiro es <strong>plano</strong> (USD/año constante) — el
-                  más conservador y predecible. Si querés retiro variable con multiplicador endowment, mirá la tabla y los headline cards arriba.
-                </p>
-
-                {!confidenceTable ? (
-                  <div style={styles.placeholder}>Calculando tabla de sensibilidad…</div>
-                ) : (
-                  <>
-                    <ConfidenceCards
-                      confidenceTable={confidenceTable}
-                      horizon={horizon}
-                      V0={V0_eff}
-                      currentWithdrawalPct={withdrawalPct}
-                      onApply={(w) => {
-                        setWithdrawalPct(w);
-                        setTimeout(() => runPledge(), 60);
-                      }}
-                    />
-
-                    <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 22, marginBottom: 8 }}>
-                      Tabla de sensibilidad · retiro % vs nivel de confianza
-                    </h4>
-                    <p style={{ fontSize: 11.5, color: "var(--ink-muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
-                      Click en cualquier fila para aplicar ese retiro. Las columnas <strong>99% / 95% / 90%</strong> indican
-                      si ese retiro cumple cada nivel de confianza. <strong>Net p10/p50/p90</strong> es tu patrimonio neto
-                      a <strong>{horizon} años</strong> en escenario pesimista / mediano / optimista.
-                    </p>
-                    <ConfidenceSensitivityTable
-                      confidenceTable={confidenceTable}
-                      horizon={horizon}
-                      V0={V0_eff}
-                      currentWithdrawalPct={withdrawalPct}
-                      onApply={(w) => {
-                        setWithdrawalPct(w);
-                        setTimeout(() => runPledge(), 60);
-                      }}
-                    />
-                  </>
-                )}
-              </div>
-
-              {/* ====== SECCIÓN: Impacto sobre tu patrimonio ====== */}
-              <h3 style={styles.h3}>Impacto de tu retiro actual · año por año</h3>
-              <p style={styles.intro}>
-                Con el retiro actual de <strong>{fmtPct(withdrawalPct, 2)}</strong> sobre {fmtUsd(V0_eff)} inicial, esto es lo
-                que pasa cada año hasta <strong>año {horizon}</strong>. La columna <strong>USD/mes promedio</strong> es el
-                retiro anual mediano dividido entre 12 (en modo endowment el monto fluctúa con la cartera, así que es un promedio).
-                <strong> Patrimonio neto</strong> = valor cartera − préstamo pendiente al cierre de cada año (mediana sobre 3000 paths).
-              </p>
-              <MonthlyImpactTable pledgeResult={pledgeResult} T={horizon} V0={V0_eff} />
-              <div style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: 14,
-                marginTop: 14,
-              }}>
-                <PignCard
-                  title={`Total retirado al año ${horizon}`}
-                  value={fmtUsd(pledgeResult.totalCashWithdrawn)}
-                  subValue={`≈ ${fmtUsd(pledgeResult.totalCashWithdrawn / (horizon * 12))}/mes promedio del periodo`}
-                  caption={`Suma de los ${horizon} retiros anuales (mediana sobre los paths)`}
-                  sub={`Costo financiero de los intereses: ${fmtUsd(pledgeResult.totalInterest)}`}
-                />
-                <PignCard
-                  title={`Patrimonio neto final · año ${horizon}`}
-                  value={fmtUsd(pledgeResult.netPatrimony_p50)}
-                  subValue={`p10 ${fmtUsd(pledgeResult.netPatrimony_p10)} · p90 ${fmtUsd(pledgeResult.netPatrimony_p90)}`}
-                  color={pledgeResult.netPatrimony_p50 > V0_eff ? "var(--positive)" : pledgeResult.netPatrimony_p50 > 0 ? "var(--ink)" : "var(--negative)"}
-                  caption={`Valor cartera − préstamo, mediana sobre 3000 paths`}
-                  sub={`Sobre tu capital inicial de ${fmtUsd(V0_eff)}`}
-                />
-                <PignCard
-                  title="P(margin call)"
-                  value={fmtPct(pledgeResult.mcProb, 1)}
-                  color={pledgeResult.mcProb < 0.05 ? "var(--positive)" : pledgeResult.mcProb < 0.10 ? "var(--gold)" : "var(--negative)"}
-                  caption={`Confianza realizada: ${fmtPct(1 - pledgeResult.mcProb, 1)}`}
-                  sub={pledgeResult.avgMCTime !== null ? `Si ocurre, en promedio año ${pledgeResult.avgMCTime.toFixed(1)}` : "Margin call no observado en la simulación"}
-                />
-              </div>
-
-              {/* ============ Panel: 5 escenarios de retiro endowment ============ */}
-              {pledgeResult.scenarioFreq && (
-                <div style={styles.endowmentPanel}>
-                  <div style={styles.endowmentHeader}>
-                    <h3 style={{ ...styles.h3, margin: 0 }}>Retiro asimétrico · 5 escenarios endowment</h3>
-                    <div style={styles.endowmentSub}>
-                      Cada año al cierre, el retiro target se multiplica según el estado de la cartera:
-                      <code style={{ marginLeft: 6 }}>W_t = {fmtPct(withdrawalPct, 2)} × V_t × mult</code>
-                    </div>
+              {/* HEADLINE — el resumen visual de la situación */}
+              <div style={styles.pignHeadlineHero}>
+                <div style={styles.pignHeadlineItem}>
+                  <div style={styles.pignHeadlineLabel}>Patrimonio neto al año {horizon}</div>
+                  <div style={styles.pignHeadlineValue}>
+                    {fmtUsd(pledgeResult.netPatrimony_p50)}
                   </div>
-                  <div style={styles.endowmentGrid}>
-                    {WITHDRAWAL_SCENARIOS.map((sc) => {
-                      const freq = pledgeResult.scenarioFreq[sc.key] || 0;
+                  <div style={styles.pignHeadlineSub}>
+                    <strong>{(pledgeResult.netPatrimony_p50 / V0_eff).toFixed(2)}×</strong> sobre tu capital inicial
+                  </div>
+                </div>
+                <div style={styles.pignHeadlineDivider} />
+                <div style={styles.pignHeadlineItem}>
+                  <div style={styles.pignHeadlineLabel}>Retiro mensual promedio</div>
+                  <div style={{ ...styles.pignHeadlineValue, color: "var(--positive)" }}>
+                    {fmtUsd(pledgeResult.avgWithdrawal_p50 / 12)}
+                  </div>
+                  <div style={styles.pignHeadlineSub}>
+                    {fmtUsd(pledgeResult.avgWithdrawal_p50)}/año · {fmtPct(wPctNet, 2)} sobre NW
+                  </div>
+                </div>
+                <div style={styles.pignHeadlineDivider} />
+                <div style={styles.pignHeadlineItem}>
+                  <div style={styles.pignHeadlineLabel}>P(margin call)</div>
+                  <div style={{
+                    ...styles.pignHeadlineValue,
+                    color: pledgeResult.mcProb < 0.05 ? "var(--positive)" : pledgeResult.mcProb < 0.10 ? "var(--gold)" : "var(--negative)",
+                  }}>
+                    {fmtPct(pledgeResult.mcProb, 1)}
+                  </div>
+                  <div style={styles.pignHeadlineSub}>
+                    Confianza {fmtPct(1 - pledgeResult.mcProb, 1)}
+                    {pledgeResult.avgMCTime !== null && <> · típicamente año {pledgeResult.avgMCTime.toFixed(1)}</>}
+                  </div>
+                </div>
+                <div style={styles.pignHeadlineDivider} />
+                <div style={styles.pignHeadlineItem}>
+                  <div style={styles.pignHeadlineLabel}>LTV al año {horizon}</div>
+                  <div style={{
+                    ...styles.pignHeadlineValue,
+                    color: pledgeResult.yearStats[horizon].ltv_p50 < 50 ? "var(--positive)" : pledgeResult.yearStats[horizon].ltv_p50 < 65 ? "var(--gold)" : "var(--negative)",
+                  }}>
+                    {(pledgeResult.yearStats[horizon].ltv_p50).toFixed(1)}%
+                  </div>
+                  <div style={styles.pignHeadlineSub}>
+                    inicial {(leverage / (1 + leverage) * 100).toFixed(1)}% · margen al umbral {(mcLTV * 100 - pledgeResult.yearStats[horizon].ltv_p50).toFixed(1)} pp
+                  </div>
+                </div>
+              </div>
+
+              {/* GRÁFICO 1 — PATRIMONIO NETO CON BOLLINGER */}
+              <div style={styles.pignChartSection}>
+                <div style={styles.pignSectionHeader}>
+                  <h3 style={styles.pignSectionTitle}>Patrimonio neto a lo largo del tiempo</h3>
+                  <p style={styles.pignSectionDesc}>
+                    Línea negra gruesa: <strong>mediana</strong> (escenario típico).
+                    Línea roja fina: <strong>media aritmética</strong> (si fueras lognormal, debería estar arriba de la mediana — qué tan arriba mide la cola).
+                    Banda gris-verde: <strong>p10–p90</strong> (rango empírico del 80% de las simulaciones).
+                    Líneas oro punteadas: <strong>Bollinger (media ± 2σ)</strong> — si los retornos fueran normales contendría el 95%.
+                  </p>
+                </div>
+                <NetWorthBollingerChart pledgeResult={pledgeResult} T={horizon} V0Propio={V0_eff} />
+              </div>
+
+              {/* GRÁFICO 2 — ¿CUÁNDO TOCO EL UMBRAL? */}
+              <div style={styles.pignChartSection}>
+                <div style={styles.pignSectionHeader}>
+                  <h3 style={styles.pignSectionTitle}>¿Cuándo toco el margin call?</h3>
+                  <p style={styles.pignSectionDesc}>
+                    Trayectoria de la <strong>LTV mediana</strong> a lo largo del horizonte para 5 niveles de retiro distintos
+                    (1%, 2%, 3%, 4%, 5% del patrimonio neto anual). La línea roja punteada arriba marca tu umbral
+                    de margin call ({fmtPct(mcLTV, 0)}). <strong>Si una curva cruza la línea roja, ese retiro es insostenible
+                    en mediana.</strong> El año de cruce aparece junto al label de cada curva.
+                  </p>
+                </div>
+                {!marginCallCurves ? (
+                  <div style={styles.placeholder}>Calculando curvas…</div>
+                ) : (
+                  <MarginCallCurvesChart marginCallCurves={marginCallCurves} mcLTV={mcLTV} T={horizon} />
+                )}
+
+                {/* Tarjetas pequeñas por retiro: resumen del gráfico */}
+                {marginCallCurves && (
+                  <div style={styles.mcCurveCards}>
+                    {marginCallCurves.map(c => {
+                      const pct = Math.round(c.wPctNet * 100);
+                      const colors = { 1: "#2d7a40", 2: "#7aa83a", 3: "#b89535", 4: "#c97a2e", 5: "#a83a35" };
+                      const crosses = c.crossYearMedian !== null;
                       return (
-                        <div key={sc.key} style={{
-                          ...styles.scenarioCard,
-                          borderTopColor: sc.color,
-                        }}>
-                          <div style={styles.scenarioName}>{sc.label}</div>
-                          <div style={styles.scenarioMult}>× {sc.mult.toFixed(2)}</div>
-                          <div style={styles.scenarioCondition}>
-                            {sc.key === "crisis"   && "DD vs peak ≤ −25%"}
-                            {sc.key === "caida"    && "DD entre −25% y −10%"}
-                            {sc.key === "normal"   && "DD 0 a −10%, sin nuevo peak"}
-                            {sc.key === "bueno"    && "nuevo peak, YoY +5% a +20%"}
-                            {sc.key === "extraord" && "nuevo peak, YoY > +20%"}
+                        <div key={pct} style={{
+                          ...styles.mcCurveCard,
+                          borderColor: colors[pct],
+                          ...(Math.abs(c.wPctNet - wPctNet) < 1e-6 ? { background: "var(--surface-2)", boxShadow: "inset 0 0 0 2px var(--ink)" } : {}),
+                        }}
+                        onClick={() => { setWPctNet(c.wPctNet); setTimeout(() => runPledge(), 60); }}>
+                          <div style={{ ...styles.mcCurveLabel, color: colors[pct] }}>{pct}% retiro</div>
+                          <div style={styles.mcCurveMetric}>
+                            <span style={styles.mcCurveMetricLabel}>P(MC):</span>
+                            <span style={{ fontWeight: 600, color: c.mcProb < 0.05 ? "var(--positive)" : c.mcProb < 0.10 ? "var(--gold)" : "var(--negative)" }}>
+                              {fmtPct(c.mcProb, 1)}
+                            </span>
                           </div>
-                          <div style={styles.scenarioFreqBar}>
-                            <div style={{
-                              ...styles.scenarioFreqFill,
-                              width: `${Math.min(freq * 100 * 3, 100)}%`,
-                              background: sc.color,
-                            }}/>
+                          <div style={styles.mcCurveMetric}>
+                            <span style={styles.mcCurveMetricLabel}>Retiro/mes:</span>
+                            <span style={{ fontWeight: 600 }}>{fmtUsd(c.avgWithdrawal_p50 / 12)}</span>
                           </div>
-                          <div style={styles.scenarioFreqLabel}>
-                            {(freq * 100).toFixed(1)}% del tiempo
+                          <div style={styles.mcCurveMetric}>
+                            <span style={styles.mcCurveMetricLabel}>NW final p50:</span>
+                            <span style={{ fontWeight: 600 }}>{fmtUsdCompact(c.netFinal_p50)}</span>
+                          </div>
+                          <div style={{ ...styles.mcCurveStatus, color: crosses ? "var(--negative)" : "var(--positive)" }}>
+                            {crosses ? `⚠ Cruza año ${c.crossYearMedian}` : "✓ No cruza"}
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                </div>
-              )}
-
-              {/* ============ Tabla: proyección de patrimonio neto multi-horizonte ============ */}
-              {pledgeResult.yearStats && pledgeResult.yearStats.length > 1 && (
-                <div style={styles.projectionPanel}>
-                  <h3 style={{ ...styles.h3, marginTop: 0 }}>Proyección de patrimonio neto · percentiles</h3>
-                  <div style={styles.projectionSub}>
-                    Sobre <strong>{fmtUsd(10000)}</strong> inicial · pignoración LTV {fmtPct(ltv0,0)} ·
-                    retiro endowment {fmtPct(withdrawalPct, 2)} sobre V_t con multiplicador asimétrico.
-                    Para extender más allá de {horizon} años, sube el slider de horizonte arriba.
-                  </div>
-                  <div style={styles.projectionTableWrap}>
-                    <table style={styles.projectionTable}>
-                      <thead>
-                        <tr>
-                          <th style={styles.projTh}>Año</th>
-                          <th style={styles.projTh}>V cartera (p50)</th>
-                          <th style={styles.projTh}>Loan acumulado (p50)</th>
-                          <th style={styles.projTh}>Retiro anual (p50)</th>
-                          <th style={styles.projTh}>Patrimonio neto p10</th>
-                          <th style={styles.projTh}>Patrimonio neto p50</th>
-                          <th style={styles.projTh}>Patrimonio neto p90</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[3, 5, 7, 10, 15, 20, 25, 30, 35, 40].filter(y => y <= horizon).map(y => {
-                          const stat = pledgeResult.yearStats[y];
-                          if (!stat) return null;
-                          const net_p10 = stat.v_p10 - stat.loan_p90;
-                          const net_p50 = stat.v_p50 - stat.loan_p50;
-                          const net_p90 = stat.v_p90 - stat.loan_p10;
-                          return (
-                            <tr key={y}>
-                              <td style={styles.projTdYear}>{y}</td>
-                              <td style={styles.projTd}>{fmtUsd(stat.v_p50)}</td>
-                              <td style={styles.projTd}>{fmtUsd(stat.loan_p50)}</td>
-                              <td style={styles.projTd}>{fmtUsd(stat.w_p50)}</td>
-                              <td style={{...styles.projTd, color: net_p10 >= 0 ? "var(--ink-muted)" : "var(--negative)"}}>{fmtUsd(net_p10)}</td>
-                              <td style={{...styles.projTd, color: net_p50 >= 10000 ? "var(--positive)" : net_p50 >= 0 ? "var(--ink)" : "var(--negative)", fontWeight: 600}}>{fmtUsd(net_p50)}</td>
-                              <td style={{...styles.projTd, color: net_p90 >= 0 ? "var(--positive)" : "var(--ink-muted)"}}>{fmtUsd(net_p90)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* ============ Benchmark: Plazo Fijo PEN sin riesgo ============ */}
-              {pfBenchmark && (
-                <>
-                  <h3 style={styles.h3}>Umbral: ¿vale la pena el riesgo vs Plazo Fijo PEN?</h3>
-                  <p style={styles.distribIntro}>
-                    Si en lugar de pignorar dejaras los <strong>{fmtUsd(10000)}</strong> en Plazo Fijo PEN
-                    al <strong>{fmtPct(pfBenchmark.pfRatePreTax, 2)}</strong> bruto
-                    ({fmtPct(pfBenchmark.pfRateNet, 2)} neto post-tax {fmtPct(taxPEN, 0)})
-                    y retiraras los mismos <strong>{fmtUsd(pledgeResult.W)}/año</strong> durante {horizon} años,
-                    el resultado sería determinístico (sin riesgo de margin call ni de mercado). Este es tu <strong>piso de cero riesgo</strong>.
-                  </p>
-                  <div style={{
-                    ...styles.btMetricsGrid,
-                    gridTemplateColumns: "repeat(3, 1fr)",
-                    marginTop: 14,
-                  }}>
-                    <PignCard
-                      title="Patrimonio PF PEN final"
-                      value={fmtUsd(pfBenchmark.pfFinal)}
-                      caption={`Determinístico: $10k crece al ${fmtPct(pfBenchmark.pfRateNet, 2)}, menos $${pledgeResult.W.toFixed(0)}/año de retiros`}
-                      sub={`Este es el umbral a superar`}
-                    />
-                    <PignCard
-                      title="P(pignoración > PF PEN)"
-                      value={fmtPct(pfBenchmark.probBeatPF, 1)}
-                      color={
-                        pfBenchmark.probBeatPF > 0.75 ? "var(--positive)" :
-                        pfBenchmark.probBeatPF > 0.55 ? "var(--gold)" :
-                        "var(--negative)"
-                      }
-                      caption={
-                        pfBenchmark.probBeatPF > 0.85 ? "Pignoración gana en >85% de escenarios" :
-                        pfBenchmark.probBeatPF > 0.65 ? "Pignoración gana en la mayoría" :
-                        pfBenchmark.probBeatPF > 0.45 ? "Mixto · no compensa claramente" :
-                        "El PF PEN supera a la pignoración"
-                      }
-                      sub={`${Math.round(pfBenchmark.probBeatPF * 3000)}/3000 paths superan el umbral`}
-                    />
-                    <PignCard
-                      title="Exceso mediano (USD)"
-                      value={(pfBenchmark.medianSpread >= 0 ? "+" : "") + fmtUsd(pfBenchmark.medianSpread)}
-                      color={pfBenchmark.medianSpread > 0 ? "var(--positive)" : "var(--negative)"}
-                      caption={
-                        pfBenchmark.medianSpread > 0
-                          ? `Pignoración termina ${fmtUsd(pfBenchmark.medianSpread)} arriba del PF en el escenario mediano`
-                          : `Pignoración termina ${fmtUsd(-pfBenchmark.medianSpread)} debajo del PF en el escenario mediano`
-                      }
-                      sub={`Cash absoluto retirado fue el mismo en ambas estrategias`}
-                    />
-                  </div>
-
-                  {/* ============ El esfuerzo: anualizar + Sharpe ============ */}
-                  <h3 style={{ ...styles.h3, marginTop: 28 }}>El esfuerzo: ¿cuánto extra ganas por unidad de riesgo?</h3>
-                  <p style={styles.distribIntro}>
-                    Anualizamos el resultado de la pignoración resolviendo numéricamente la tasa equivalente
-                    de un PF que daría el mismo patrimonio. La <strong>volatilidad de la cartera ({fmtPct(sigma, 2)})</strong> se
-                    asigna íntegramente al exceso porque el PF tiene σ = 0. El cociente es el <strong>Sharpe del esfuerzo</strong>:
-                    cuánto retorno extra anual obtienes por cada punto de volatilidad asumida.
-                  </p>
-                  <div style={{
-                    ...styles.btMetricsGrid,
-                    gridTemplateColumns: "repeat(3, 1fr)",
-                    marginTop: 14,
-                  }}>
-                    <PignCard
-                      title="Rentabilidad extra anual"
-                      value={(pfBenchmark.excessCAGR >= 0 ? "+" : "") + fmtPct(pfBenchmark.excessCAGR, 2)}
-                      color={pfBenchmark.excessCAGR > 0 ? "var(--positive)" : "var(--negative)"}
-                      caption={`CAGR equivalente pignoración: ${fmtPct(pfBenchmark.equivRate, 2)} · PF: ${fmtPct(pfBenchmark.pfRateNet, 2)}`}
-                      sub={`Lo que ganas extra por año, anualizado al horizonte ${horizon}a`}
-                    />
-                    <PignCard
-                      title="Volatilidad asignada"
-                      value={fmtPct(pfBenchmark.volEsfuerzo, 1)}
-                      caption={`σ de la cartera completa (toda la incertidumbre va al exceso)`}
-                      sub={`El PF tiene σ = 0, así que el riesgo total es el de tu portfolio`}
-                    />
-                    <PignCard
-                      title="Sharpe del esfuerzo"
-                      value={pfBenchmark.sharpeEsfuerzo.toFixed(2)}
-                      color={
-                        pfBenchmark.sharpeEsfuerzo > 0.5 ? "var(--positive)" :
-                        pfBenchmark.sharpeEsfuerzo > 0.2 ? "var(--gold)" :
-                        "var(--negative)"
-                      }
-                      caption={
-                        pfBenchmark.sharpeEsfuerzo > 0.7 ? "Excelente · ratio top de la industria" :
-                        pfBenchmark.sharpeEsfuerzo > 0.4 ? "Bueno · el riesgo paga decentemente" :
-                        pfBenchmark.sharpeEsfuerzo > 0.2 ? "Aceptable · ratio modesto" :
-                        pfBenchmark.sharpeEsfuerzo > 0   ? "Pobre · poco retorno por mucho riesgo" :
-                        "Negativo · el PF gana en mediana"
-                      }
-                      sub={`El indicador de oro: excessCAGR / σ`}
-                    />
-                  </div>
-
-                  {/* ============ Sweep por horizonte ============ */}
-                  {pledgeResult.horizonSweep && (
-                    <>
-                      <h3 style={{ ...styles.h3, marginTop: 28 }}>¿Con qué horizonte temporal vale más la pena?</h3>
-                      <p style={styles.distribIntro}>
-                        Repetimos el análisis para horizontes de 5 a 30 años. Cada punto del gráfico es una simulación
-                        completa con 1.500 paths. Buscamos el <strong>horizonte que maximiza el Sharpe del esfuerzo</strong> —
-                        ahí está el sweet spot. La línea roja vertical marca el horizonte actual ({horizon} años).
-                      </p>
-                      <div style={{ marginTop: 4, marginBottom: 14, padding: "12px 18px", background: "var(--surface-2)", border: "1px solid var(--gold)", borderRadius: 2 }}>
-                        <strong style={{ color: "var(--gold)" }}>★ Horizonte óptimo: {pledgeResult.horizonSweep.optimalHorizon.T} años</strong>
-                        {" — "}Sharpe del esfuerzo = <strong>{pledgeResult.horizonSweep.optimalHorizon.sharpeEsfuerzo.toFixed(2)}</strong>,
-                        rentabilidad extra <strong>{fmtPct(pledgeResult.horizonSweep.optimalHorizon.excessCAGR, 2)}</strong>,
-                        P(beat PF) = <strong>{fmtPct(pledgeResult.horizonSweep.optimalHorizon.probBeatPF, 0)}</strong>
-                      </div>
-                      <div style={styles.chartWrap}>
-                        <ResponsiveContainer width="100%" height={340}>
-                          <ComposedChart data={pledgeResult.horizonSweep.curve} margin={{ top: 20, right: 60, left: 20, bottom: 40 }}>
-                            <CartesianGrid stroke="rgba(0,0,0,0.06)" />
-                            <XAxis
-                              dataKey="T" type="number" domain={[5, 30]}
-                              tickFormatter={v => v + "a"}
-                              stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                              label={{ value: "Horizonte temporal (años)", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }}
-                            />
-                            <YAxis
-                              yAxisId="sharpe"
-                              orientation="left"
-                              tickFormatter={v => v.toFixed(2)}
-                              stroke="var(--gold)" tick={{ fontSize: 11 }}
-                              label={{ value: "Sharpe del esfuerzo", angle: -90, position: "insideLeft", fill: "var(--gold)", fontSize: 12 }}
-                            />
-                            <YAxis
-                              yAxisId="prob"
-                              orientation="right"
-                              domain={[0, 100]}
-                              tickFormatter={v => v.toFixed(0) + "%"}
-                              stroke="var(--accent)" tick={{ fontSize: 11 }}
-                              label={{ value: "P(beat PF)", angle: 90, position: "insideRight", fill: "var(--accent)", fontSize: 12 }}
-                            />
-                            <Tooltip
-                              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
-                              labelFormatter={v => `Horizonte ${v} años`}
-                              formatter={(v, name) => {
-                                if (name === "Sharpe esfuerzo") return [v.toFixed(2), name];
-                                if (name === "P(beat PF)") return [v.toFixed(1) + "%", name];
-                                if (name === "Excess CAGR") return [(v*100).toFixed(2) + "%", name];
-                                return [v, name];
-                              }}
-                            />
-                            <Line
-                              yAxisId="sharpe"
-                              type="monotone"
-                              dataKey="sharpeEsfuerzo"
-                              stroke="var(--gold)"
-                              strokeWidth={3}
-                              dot={{ r: 4, fill: "var(--gold)" }}
-                              name="Sharpe esfuerzo"
-                              isAnimationActive={false}
-                            />
-                            <Line
-                              yAxisId="prob"
-                              type="monotone"
-                              dataKey={(d) => d.probBeatPF * 100}
-                              stroke="var(--accent)"
-                              strokeWidth={2}
-                              strokeDasharray="6 3"
-                              dot={{ r: 3, fill: "var(--accent)" }}
-                              name="P(beat PF)"
-                              isAnimationActive={false}
-                            />
-                            <ReferenceLine
-                              x={horizon}
-                              stroke="var(--negative)"
-                              strokeDasharray="3 3"
-                              label={{ value: `actual (${horizon}a)`, position: "top", fontSize: 10, fill: "var(--negative)" }}
-                              yAxisId="sharpe"
-                            />
-                            <ReferenceLine
-                              x={pledgeResult.horizonSweep.optimalHorizon.T}
-                              stroke="var(--positive)"
-                              strokeWidth={2}
-                              label={{ value: `★ óptimo`, position: "top", fontSize: 10, fill: "var(--positive)", fontWeight: 600 }}
-                              yAxisId="sharpe"
-                            />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      </div>
-
-                      <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 18 }}>Rentabilidad extra anual por horizonte</h4>
-                      <div style={styles.chartWrap}>
-                        <ResponsiveContainer width="100%" height={240}>
-                          <ComposedChart data={pledgeResult.horizonSweep.curve} margin={{ top: 16, right: 30, left: 20, bottom: 40 }}>
-                            <CartesianGrid stroke="rgba(0,0,0,0.06)" />
-                            <XAxis
-                              dataKey="T" type="number" domain={[5, 30]}
-                              tickFormatter={v => v + "a"}
-                              stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                              label={{ value: "Horizonte temporal (años)", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }}
-                            />
-                            <YAxis
-                              tickFormatter={v => (v*100).toFixed(1) + "%"}
-                              stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                              label={{ value: "Excess CAGR", angle: -90, position: "insideLeft", fill: "var(--ink-muted)", fontSize: 12 }}
-                            />
-                            <Tooltip
-                              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
-                              labelFormatter={v => `Horizonte ${v} años`}
-                              formatter={(v) => [(v*100).toFixed(2) + "%", "Excess CAGR"]}
-                            />
-                            <ReferenceLine y={0} stroke="var(--ink-muted)" strokeDasharray="2 2" />
-                            <Area
-                              type="monotone"
-                              dataKey="excessCAGR"
-                              stroke="var(--positive)"
-                              strokeWidth={2.5}
-                              fill="var(--positive)"
-                              fillOpacity={0.12}
-                              isAnimationActive={false}
-                            />
-                            <ReferenceLine
-                              x={horizon}
-                              stroke="var(--negative)"
-                              strokeDasharray="3 3"
-                            />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-
-              {/* Withdrawal sweep chart: P(margin call) vs retiro % */}
-              <h3 style={styles.h3}>Sensibilidad: ¿cuánto puedo retirar al año?</h3>
-              <p style={styles.distribIntro}>
-                Manteniendo todo lo demás constante (LTV inicial <strong>{fmtPct(ltv0, 0)}</strong>, tasa <strong>{fmtPct(intRate, 2)}</strong>,
-                umbral <strong>{fmtPct(marginCallLTV, 0)}</strong>, horizonte <strong>{horizon} años</strong>), esta curva muestra
-                cómo crece la probabilidad de margin call a medida que aumentas el retiro anual.
-              </p>
-              <div style={styles.chartWrap}>
-                <ResponsiveContainer width="100%" height={320}>
-                  <ComposedChart data={pledgeResult.sweep.curve} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
-                    <CartesianGrid stroke="rgba(0,0,0,0.06)" />
-                    <XAxis
-                      dataKey="wPctDisplay" type="number" domain={[0, 10]}
-                      tickFormatter={v => v.toFixed(1) + "%"}
-                      stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                      label={{ value: "Retiro anual (% del capital inicial)", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }}
-                    />
-                    <YAxis
-                      domain={[0, 100]} tickFormatter={v => v.toFixed(0) + "%"}
-                      stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                      label={{ value: "P(margin call)", angle: -90, position: "insideLeft", fill: "var(--ink-muted)", fontSize: 12 }}
-                    />
-                    <Tooltip
-                      contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
-                      formatter={(v, name) => name === "P(margin call)" ? [v.toFixed(1) + "%", name] : v}
-                      labelFormatter={v => `Retiro ${v.toFixed(2)}% (${fmtUsd(v * 100)}/año)`}
-                    />
-
-                    {/* Filled area under curve */}
-                    <Area type="monotone" dataKey="mcProbPct" stroke="var(--accent)" strokeWidth={2.5}
-                          fill="var(--accent)" fillOpacity={0.15} isAnimationActive={false}
-                          name="P(margin call)" />
-
-                    {/* Horizontal reference lines at common thresholds */}
-                    <ReferenceLine y={5} stroke="var(--positive)" strokeDasharray="3 3"
-                                   label={{ value: "5% (conservador)", position: "right", fontSize: 10, fill: "var(--positive)" }} />
-                    <ReferenceLine y={10} stroke="var(--gold)" strokeDasharray="3 3"
-                                   label={{ value: "10% (moderado)", position: "right", fontSize: 10, fill: "var(--gold)" }} />
-                    <ReferenceLine y={20} stroke="var(--negative)" strokeDasharray="3 3"
-                                   label={{ value: "20% (agresivo)", position: "right", fontSize: 10, fill: "var(--negative)" }} />
-
-                    {/* Vertical line at current withdrawal */}
-                    <ReferenceLine x={withdrawalPct * 100} stroke="var(--ink)" strokeWidth={2}
-                                   label={{ value: `Tu retiro: ${fmtPct(withdrawalPct, 2)}`, position: "insideTopLeft", fontSize: 11, fill: "var(--ink)", fontWeight: 700 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-                <div style={styles.sweepCrossovers}>
-                  <span style={styles.sweepCrossLabel}>Retiro máximo recomendado:</span>
-                  <span><span style={{...styles.dot, background: "var(--positive)"}}/>
-                    <strong>{pledgeResult.sweep.cross5 !== null ? fmtPct(pledgeResult.sweep.cross5, 2) : ">10%"}</strong> para mantener P(MC) ≤ 5%
-                  </span>
-                  <span><span style={{...styles.dot, background: "var(--gold)"}}/>
-                    <strong>{pledgeResult.sweep.cross10 !== null ? fmtPct(pledgeResult.sweep.cross10, 2) : ">10%"}</strong> para P(MC) ≤ 10%
-                  </span>
-                  <span><span style={{...styles.dot, background: "var(--negative)"}}/>
-                    <strong>{pledgeResult.sweep.cross20 !== null ? fmtPct(pledgeResult.sweep.cross20, 2) : ">10%"}</strong> para P(MC) ≤ 20%
-                  </span>
-                </div>
-              </div>
-
-              {/* ============ Retiro máximo sostenible: análisis completo ============ */}
-              {sustainableScenario && (
-                <>
-                  <h3 style={{ ...styles.h3, marginTop: 28 }}>Retiro máximo sostenible · análisis completo</h3>
-                  <p style={styles.distribIntro}>
-                    Asume que <strong>todos los retiros se hacen 100% vía préstamo pignorado</strong> a la
-                    tasa de <strong>{fmtPct(intRate, 2)}</strong> (slider arriba). La cartera nunca se vende —
-                    sigue generando retorno μ = <strong>{fmtPct(mu, 2)}</strong>. El retiro máximo es el más
-                    alto que mantiene la probabilidad de margin call debajo de tu tolerancia.
-                  </p>
-
-                  {/* Selector de tolerancia */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 10, marginBottom: 18 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink-muted)" }}>
-                      Tolerancia P(margin call):
-                    </span>
-                    {[0.01, 0.05, 0.10, 0.20].map(tol => (
-                      <button
-                        key={tol}
-                        onClick={() => setMcTolerance(tol)}
-                        style={{
-                          padding: "6px 14px",
-                          fontFamily: "'JetBrains Mono', monospace",
-                          fontSize: 12,
-                          fontWeight: 600,
-                          background: Math.abs(mcTolerance - tol) < 0.001 ? "var(--ink)" : "var(--surface)",
-                          color: Math.abs(mcTolerance - tol) < 0.001 ? "var(--bg)" : "var(--ink)",
-                          border: "1px solid var(--border-strong)",
-                          borderRadius: 2,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {tol === 0.01 ? "1% (muy conservador)" :
-                         tol === 0.05 ? "5% (conservador)" :
-                         tol === 0.10 ? "10% (moderado)" :
-                         "20% (agresivo)"}
-                      </button>
-                    ))}
-                  </div>
-
-                  {sustainableScenario.infeasible ? (
-                    <div style={{ ...styles.placeholder, color: "var(--negative)" }}>
-                      Con los parámetros actuales (LTV {fmtPct(ltv0, 0)}, tasa {fmtPct(intRate, 2)}, umbral {fmtPct(marginCallLTV, 0)})
-                      ningún retiro mantiene P(margin call) ≤ {fmtPct(mcTolerance, 0)}. Reduce LTV inicial,
-                      aumenta el umbral de margin call, o sube tu tolerancia.
-                    </div>
-                  ) : (
-                    <>
-                      {/* Headline + botón aplicar */}
-                      <div style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 18,
-                        padding: "16px 22px",
-                        background: "var(--surface-2)",
-                        border: "2px solid var(--positive)",
-                        borderRadius: 2,
-                        marginBottom: 22,
-                      }}>
-                        <div>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-muted)", letterSpacing: "0.05em", textTransform: "uppercase" }}>
-                            Retiro máximo a tolerancia {fmtPct(mcTolerance, 0)}
-                          </div>
-                          <div style={{ fontSize: 26, fontWeight: 700, color: "var(--positive)", marginTop: 4 }}>
-                            {fmtPct(sustainableScenario.wMax, 2)} anual
-                            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--ink-muted)", marginLeft: 10 }}>
-                              = {fmtUsd(sustainableScenario.W_year)}/año sobre $10k
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>
-                            P(margin call) realizada en la re-simulación: {fmtPct(sustainableScenario.mcProbActual, 1)}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            setWithdrawalPct(sustainableScenario.wMax);
-                            setTimeout(() => runPledge(), 60);
-                          }}
-                          style={{ ...styles.runBtn, whiteSpace: "nowrap" }}
-                          disabled={pledgeRunning}
-                          title="Aplica este retiro al slider 'Retiro anual' y re-corre el Monte Carlo completo"
-                        >
-                          Aplicar este retiro →
-                        </button>
-                      </div>
-
-                      {/* Gráfico: net patrimony + LTV */}
-                      <h4 style={{ ...styles.h3, fontSize: 14 }}>Evolución bajo el escenario sostenible</h4>
-                      <div style={styles.chartWrap}>
-                        <ResponsiveContainer width="100%" height={380}>
-                          <ComposedChart data={sustainableScenario.chartData} margin={{ top: 20, right: 70, left: 20, bottom: 30 }}>
-                            <CartesianGrid stroke="rgba(0,0,0,0.06)" />
-                            <XAxis dataKey="year" stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                                   label={{ value: "Años", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }} />
-                            <YAxis yAxisId="left" tickFormatter={fmtUsdK} stroke="var(--positive)" tick={{ fontSize: 11, fill: "var(--positive)" }}
-                                   label={{ value: "Patrimonio neto (USD)", angle: -90, position: "insideLeft", fill: "var(--positive)", fontSize: 11 }} />
-                            <YAxis yAxisId="right" orientation="right" domain={[0, 100]}
-                                   tickFormatter={v => v + "%"} stroke="var(--gold)" tick={{ fontSize: 11, fill: "var(--gold)" }}
-                                   label={{ value: "LTV %", angle: 90, position: "insideRight", fill: "var(--gold)", fontSize: 11 }} />
-                            <Tooltip
-                              contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
-                              formatter={(v, name) => {
-                                if (name === "LTV (mediana)" || name === "Umbral margin call") return [v.toFixed(1) + "%", name];
-                                if (name === "Banda LTV P10–P90") return [v.toFixed(1) + "%", "ancho"];
-                                if (name === "Banda neto P10–P90") return [fmtUsd(v), "ancho"];
-                                return [fmtUsd(v), name];
-                              }}
-                              labelFormatter={(v) => `Año ${v}`}
-                            />
-                            {/* Banda neto p10-p90 */}
-                            <Area yAxisId="left" type="monotone" dataKey="net_band_base" stackId="netband"
-                                  stroke="none" fill="transparent" name=" " />
-                            <Area yAxisId="left" type="monotone" dataKey="net_band_width" stackId="netband"
-                                  stroke="none" fill="rgba(45, 122, 79, 0.18)" name="Banda neto P10–P90" isAnimationActive={false} />
-                            {/* Mediana neto */}
-                            <Line yAxisId="left" type="monotone" dataKey="net_p50"
-                                  stroke="var(--positive)" strokeWidth={2.5} dot={false}
-                                  name="Patrimonio neto (mediana)" isAnimationActive={false} />
-                            {/* Referencia V0 */}
-                            <ReferenceLine yAxisId="left" y={10000} stroke="var(--ink-muted)" strokeDasharray="3 3"
-                                          label={{ value: "Capital inicial", position: "right", fontSize: 10, fill: "var(--ink-muted)" }} />
-                            {/* LTV mediana */}
-                            <Line yAxisId="right" type="monotone" dataKey="ltv_p50"
-                                  stroke="var(--gold)" strokeWidth={2.5} strokeDasharray="6 3" dot={false}
-                                  name="LTV (mediana)" isAnimationActive={false} />
-                            {/* Umbral margin call */}
-                            <ReferenceLine yAxisId="right" y={marginCallLTV * 100}
-                                          stroke="var(--negative)" strokeWidth={2}
-                                          label={{ value: `Margin call ${fmtPct(marginCallLTV, 0)}`, position: "right", fontSize: 10, fill: "var(--negative)", fontWeight: 600 }} />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      </div>
-
-                      {/* Cards: CAGR comparativas */}
-                      <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 18 }}>CAGR comparativas · ¿qué tasa anual equivalente entregaste?</h4>
-                      <div style={{
-                        ...styles.btMetricsGrid,
-                        gridTemplateColumns: "repeat(4, 1fr)",
-                        marginTop: 10,
-                      }}>
-                        <PignCard
-                          title="CAGR Net only"
-                          value={fmtPct(sustainableScenario.cagrNet, 2)}
-                          color={sustainableScenario.cagrNet > 0 ? "var(--ink)" : "var(--negative)"}
-                          caption={`Patrimonio neto final $${sustainableScenario.finalNet.toFixed(0)} sobre $10k inicial`}
-                          sub={`Lo que sigue invertido al final del horizonte`}
-                        />
-                        <PignCard
-                          title="CAGR Total Wealth"
-                          value={fmtPct(sustainableScenario.cagrTotalWealth, 2)}
-                          color="var(--positive)"
-                          caption={`Incluye cash ya consumido: $${sustainableScenario.finalNet.toFixed(0)} + $${(sustainableScenario.W_year * sustainableScenario.T).toFixed(0)} retirados`}
-                          sub={`Lo que generó la estrategia en términos absolutos`}
-                        />
-                        <PignCard
-                          title="CAGR PF PEN"
-                          value={fmtPct(sustainableScenario.cagrPF, 2)}
-                          color="var(--ink-muted)"
-                          caption={`Benchmark cero riesgo · post-tax`}
-                          sub={`Tu piso de comparación`}
-                        />
-                        <PignCard
-                          title="CAGR Portfolio Gross"
-                          value={fmtPct(sustainableScenario.cagrGross, 2)}
-                          color="var(--gold)"
-                          caption={`μ del portfolio sin pignoración ni retiros`}
-                          sub={`Lo que tendrías si no tocaras nada`}
-                        />
-                      </div>
-
-                      {/* Cards: detalle del escenario */}
-                      <h4 style={{ ...styles.h3, fontSize: 14, marginTop: 18 }}>Detalle del escenario</h4>
-                      <div style={{
-                        ...styles.btMetricsGrid,
-                        gridTemplateColumns: "repeat(3, 1fr)",
-                        marginTop: 10,
-                      }}>
-                        <PignCard
-                          title="Apalancamiento final"
-                          value={fmtPct(sustainableScenario.leverageFinal, 1)}
-                          color={
-                            sustainableScenario.leverageFinal < 0.5 ? "var(--positive)" :
-                            sustainableScenario.leverageFinal < 0.65 ? "var(--gold)" : "var(--negative)"
-                          }
-                          caption={`LTV mediano al cierre del horizonte (préstamo / valor cartera)`}
-                          sub={
-                            sustainableScenario.leverageFinal < 0.4 ? "Sano · margen amplio" :
-                            sustainableScenario.leverageFinal < 0.55 ? "Aceptable · vigilar" :
-                            "Cerca del umbral · ojo"
-                          }
-                        />
-                        <PignCard
-                          title="Cash flow yield"
-                          value={fmtPct(sustainableScenario.cashFlowYield, 2)}
-                          caption={`$${sustainableScenario.W_year.toFixed(0)}/año sobre $10k inicial`}
-                          sub={`Lo que retiras como % del capital de partida`}
-                        />
-                        <PignCard
-                          title="Recovery margin"
-                          value={fmtPct(sustainableScenario.recoveryMargin, 1)}
-                          color={
-                            sustainableScenario.recoveryMargin > 0.30 ? "var(--positive)" :
-                            sustainableScenario.recoveryMargin > 0.15 ? "var(--gold)" : "var(--negative)"
-                          }
-                          caption={`Distancia promedio entre LTV mediano y umbral margin call`}
-                          sub={`Más colchón = más tranquilo`}
-                        />
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-
-              {/* Main chart: portfolio band + loan + LTV */}
-              <h3 style={styles.h3}>Dinámica completa · cartera, préstamo y LTV</h3>
-              <div style={styles.chartWrap}>
-                <ResponsiveContainer width="100%" height={440}>
-                  <ComposedChart data={pledgeResult.yearStats} margin={{ top: 20, right: 70, left: 20, bottom: 30 }}>
-                    <CartesianGrid stroke="rgba(0,0,0,0.06)" />
-                    <XAxis dataKey="year" stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                           label={{ value: "Años", position: "bottom", offset: 5, fill: "var(--ink-muted)", fontSize: 12 }} />
-                    <YAxis yAxisId="left" tickFormatter={fmtUsdK} stroke="var(--ink-muted)" tick={{ fontSize: 11 }}
-                           label={{ value: "USD", angle: -90, position: "insideLeft", fill: "var(--ink-muted)", fontSize: 11 }} />
-                    <YAxis yAxisId="right" orientation="right" domain={[0, 100]}
-                           tickFormatter={v => v + "%"} stroke="var(--gold)" tick={{ fontSize: 11, fill: "var(--gold)" }}
-                           label={{ value: "LTV %", angle: 90, position: "insideRight", fill: "var(--gold)", fontSize: 11 }} />
-                    <Tooltip
-                      contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontSize: 11 }}
-                      formatter={(v, name) => {
-                        if (name === "LTV (mediana)" || name === "Umbral margin call") return [v.toFixed(1) + "%", name];
-                        if (name === "Préstamo") return [fmtUsd(v), name];
-                        if (name === "Cartera (mediana)") return [fmtUsd(v), name];
-                        if (name === "Banda cartera P10–P90") return [fmtUsd(v), "ancho"];
-                        return [fmtUsd(v), name];
-                      }}
-                      labelFormatter={(v) => `Año ${v}`}
-                    />
-
-                    {/* Portfolio band P10-P90 stacked */}
-                    <Area yAxisId="left" type="monotone" dataKey="v_band_base" stackId="vband"
-                          stroke="none" fill="transparent" name=" " />
-                    <Area yAxisId="left" type="monotone" dataKey="v_band_width" stackId="vband"
-                          stroke="none" fill="rgba(45, 94, 58, 0.18)" name="Banda cartera P10–P90" isAnimationActive={false} />
-
-                    {/* Portfolio median */}
-                    <Line yAxisId="left" type="monotone" dataKey="v_p50"
-                          stroke="var(--positive)" strokeWidth={2.5} dot={false}
-                          name="Cartera (mediana)" isAnimationActive={false} />
-
-                    {/* Loan deterministic */}
-                    <Line yAxisId="left" type="monotone" dataKey="loan"
-                          stroke="var(--accent)" strokeWidth={2.5} dot={false}
-                          name="Préstamo" isAnimationActive={false} />
-
-                    {/* LTV band P10-P90 on right axis */}
-                    <Area yAxisId="right" type="monotone" dataKey="ltv_band_base" stackId="ltvband"
-                          stroke="none" fill="transparent" name=" " />
-                    <Area yAxisId="right" type="monotone" dataKey="ltv_band_width" stackId="ltvband"
-                          stroke="none" fill="rgba(184, 146, 58, 0.20)" name="Banda LTV P10–P90" isAnimationActive={false} />
-
-                    {/* LTV median on right axis */}
-                    <Line yAxisId="right" type="monotone" dataKey="ltv_p50"
-                          stroke="var(--gold)" strokeWidth={2} strokeDasharray="4 2" dot={false}
-                          name="LTV (mediana)" isAnimationActive={false} />
-
-                    {/* Margin call threshold */}
-                    <ReferenceLine yAxisId="right" y={marginCallLTV * 100}
-                                   stroke="var(--negative)" strokeWidth={1.5} strokeDasharray="6 3"
-                                   label={{ value: `Umbral ${fmtPct(marginCallLTV, 0)}`, position: "insideTopRight", fill: "var(--negative)", fontSize: 10, fontWeight: 700 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-                <div style={styles.legend}>
-                  <span><span style={{...styles.dotSquare, background: "rgba(45, 94, 58, 0.30)"}}/> Cartera banda P10–P90</span>
-                  <span><span style={{...styles.dot, background: "var(--positive)"}}/> Cartera mediana</span>
-                  <span><span style={{...styles.dot, background: "var(--accent)"}}/> Préstamo</span>
-                  <span><span style={{...styles.dotSquare, background: "rgba(184, 146, 58, 0.30)"}}/> LTV banda</span>
-                  <span><span style={{...styles.dot, background: "var(--gold)"}}/> LTV mediana</span>
-                  <span><span style={{...styles.dot, background: "var(--negative)"}}/> Umbral margin call</span>
-                </div>
-              </div>
-
-              {/* Heatmap (collapsible) */}
-              <div style={styles.heatmapWrap}>
-                <button
-                  onClick={() => {
-                    setHeatmapOpen(!heatmapOpen);
-                    if (!heatmapOpen && !heatmapResult) runHeatmapSim();
-                  }}
-                  style={styles.heatmapToggle}
-                >
-                  {heatmapOpen ? "▼" : "▶"} Mapa de viabilidad · LTV inicial × Retiro anual → P(margin call)
-                </button>
-                {heatmapOpen && (
-                  <div style={styles.heatmapBody}>
-                    {!heatmapResult && heatmapRunning && (
-                      <div style={styles.placeholder}>Generando mapa (800 paths × 90 cells)...</div>
-                    )}
-                    {!heatmapResult && !heatmapRunning && (
-                      <button onClick={runHeatmapSim} style={styles.runBtn}>Generar mapa</button>
-                    )}
-                    {heatmapResult && (
-                      <>
-                        <p style={styles.distribIntro}>
-                          Cada celda muestra P(margin call) a {horizon} años para esa combinación de LTV inicial (filas) y retiro anual (columnas),
-                          con tasa <strong>{fmtPct(intRate, 2)}</strong> y umbral <strong>{fmtPct(marginCallLTV, 0)}</strong>.
-                          Verde es zona segura, dorado advertencia, rojo no viable.
-                        </p>
-                        <HeatmapDisplay data={heatmapResult} />
-                        <button onClick={runHeatmapSim} style={{...styles.runBtn, marginTop: 14}} disabled={heatmapRunning}>
-                          {heatmapRunning ? "Actualizando..." : "Re-generar mapa con parámetros actuales"}
-                        </button>
-                      </>
-                    )}
-                  </div>
                 )}
               </div>
 
-              <div style={styles.btNote}>
-                <strong>Nota metodológica.</strong> El préstamo se modela como crédito rotativo: cada año
-                el saldo acumula la tasa y se le suman los retiros nuevos. La cartera evoluciona estocásticamente
-                vía Monte Carlo (3,000 trayectorias) con μ y σ derivados de tu cartera Markowitz activa.
-                La línea de LTV mediana muestra el camino "típico"; la banda muestra dispersión 80%.
-                {compareVsSell && <> El cálculo de ahorro fiscal asume que cada retiro al vender contiene una fracción de ganancia = 1 − 1/(crecimiento mediano acumulado al año t), aplicando tax ponderado por tu split USD/PEN. Es una estimación conservadora — en la realidad los gains varían con tu base de costo específica.</>}
+              {/* TABLA DE SENSIBILIDAD COMPLETA */}
+              <details style={styles.pignDetails}>
+                <summary style={styles.pignSummary}>
+                  Tabla de sensibilidad completa · {confidenceTable?.rows.length || 0} retiros desde 0% hasta 8%
+                </summary>
+                <div style={{ marginTop: 14 }}>
+                  <p style={{ fontSize: 12, color: "var(--ink-muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
+                    Click en cualquier fila para aplicar ese retiro. Las columnas <strong>99% / 95% / 90%</strong> indican
+                    si ese retiro cumple cada nivel de confianza.
+                  </p>
+                  {confidenceTable && (
+                    <ConfidenceSensitivityTableV2
+                      confidenceTable={confidenceTable}
+                      V0={V0_eff}
+                      currentWPctNet={wPctNet}
+                      onApply={(w) => { setWPctNet(w); setTimeout(() => runPledge(), 60); }}
+                    />
+                  )}
+                </div>
+              </details>
+
+              {/* AÑO POR AÑO COLAPSABLE */}
+              <details style={styles.pignDetails}>
+                <summary style={styles.pignSummary}>
+                  Detalle año por año · valores medianos de V, C, L, retiro y LTV
+                </summary>
+                <div style={{ marginTop: 14 }}>
+                  <YearByYearTable pledgeResult={pledgeResult} T={horizon} />
+                </div>
+              </details>
+
+              {/* MECÁNICA EXPLICATIVA */}
+              <div style={styles.pignMechBox}>
+                <div style={styles.pignMechTitle}>Mecánica anual del modelo</div>
+                <ol style={styles.pignMechList}>
+                  <li>La cartera <strong>V</strong> crece por price return: <code>V × exp((μ − div_yield − σ²/2) + σZ)</code></li>
+                  <li>Recibe el aporte DCA anual ({fmtUsd((dcaMonthly_eff || 0) * 12)}/año)</li>
+                  <li>Genera dividendos <code>D = V × {fmtPct(dividendYield, 1)}</code> que caen en el cash account</li>
+                  <li>El cash account rinde <strong>{fmtPct(cashRate, 1)}</strong>, paga intereses del préstamo (<code>L × {fmtPct(intRate, 2)}</code>) y el retiro anual ({fmtPct(wPctNet, 2)} × NW)</li>
+                  <li>Si el cash queda en negativo, el déficit se suma al préstamo (LTV sube)</li>
+                  <li>Margin call si <code>L/V &gt; {fmtPct(mcLTV, 0)}</code> en cualquier año</li>
+                </ol>
               </div>
             </>
           )}
@@ -6616,6 +6106,332 @@ function MonthlyImpactTable({ pledgeResult, T, V0 }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ============================================================
+// V2 COMPONENTS — para el modelo apalancado con cash account
+// (la confidence table v2 tiene la columna wPctNet en lugar de wPct,
+// y los retiros se calculan sobre patrimonio neto que crece año a año)
+// ============================================================
+function ConfidenceCardsV2({ confidenceTable, horizon, V0, onApply, currentWPctNet }) {
+  if (!confidenceTable) return null;
+  const items = [
+    { key: "99", label: "99% confianza", desc: "P(margin call) ≤ 1%", row: confidenceTable.max99, color: "var(--positive)", tone: "Muy conservador" },
+    { key: "95", label: "95% confianza", desc: "P(margin call) ≤ 5%", row: confidenceTable.max95, color: "var(--gold)",     tone: "Conservador estándar" },
+    { key: "90", label: "90% confianza", desc: "P(margin call) ≤ 10%", row: confidenceTable.max90, color: "#c97a2e",         tone: "Moderado" },
+  ];
+  return (
+    <div style={styles.confidenceCardsGrid}>
+      {items.map(it => {
+        if (!it.row) {
+          return (
+            <div key={it.key} style={{ ...styles.confidenceCard, borderColor: "var(--border)" }}>
+              <div style={styles.confidenceCardHeader}>
+                <div style={{ ...styles.confidenceCardLabel, color: it.color }}>{it.label}</div>
+                <div style={styles.confidenceCardDesc}>{it.desc}</div>
+              </div>
+              <div style={styles.confidenceCardInfeasible}>
+                Ni siquiera 0%/año cumple esta confianza. Reducí el apalancamiento, subí el umbral, o ajustá la cartera.
+              </div>
+            </div>
+          );
+        }
+        const r = it.row;
+        const isCurrent = Math.abs(r.wPctNet - currentWPctNet) < 1e-6;
+        return (
+          <div key={it.key} style={{
+            ...styles.confidenceCard,
+            borderColor: it.color,
+            ...(isCurrent ? styles.confidenceCardSelected : {}),
+          }}>
+            <div style={styles.confidenceCardHeader}>
+              <div style={{ ...styles.confidenceCardLabel, color: it.color }}>{it.label}</div>
+              <div style={styles.confidenceCardDesc}>{it.desc} · {it.tone}</div>
+            </div>
+            <div style={styles.confidenceCardMainNumber}>
+              <span style={{ color: it.color }}>{fmtPct(r.wPctNet, 2)}</span>
+              <span style={styles.confidenceCardMainSub}>del NW al año</span>
+            </div>
+            <div style={styles.confidenceCardMetrics}>
+              <div>
+                <div style={styles.confidenceCardMetricLabel}>USD/año (promedio anual mediano)</div>
+                <div style={styles.confidenceCardMetricValue}>{fmtUsd(r.W_year_p50)}</div>
+              </div>
+              <div>
+                <div style={styles.confidenceCardMetricLabel}>USD/mes promedio</div>
+                <div style={styles.confidenceCardMetricValue}>{fmtUsd(r.W_month_p50)}</div>
+              </div>
+              <div>
+                <div style={styles.confidenceCardMetricLabel}>Patrimonio neto a {horizon}a (p50)</div>
+                <div style={{
+                  ...styles.confidenceCardMetricValue,
+                  color: r.netFinal_p50 >= V0 ? "var(--positive)" : r.netFinal_p50 >= 0 ? "var(--ink)" : "var(--negative)",
+                }}>{fmtUsd(r.netFinal_p50)}</div>
+              </div>
+            </div>
+            <button
+              onClick={() => onApply(r.wPctNet)}
+              style={{
+                ...styles.loadBtn,
+                background: isCurrent ? "var(--ink-muted)" : it.color,
+                cursor: isCurrent ? "default" : "pointer",
+              }}
+              disabled={isCurrent}
+            >
+              {isCurrent ? "✓ Activo" : "Elegir este retiro →"}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ConfidenceSensitivityTableV2({ confidenceTable, V0, onApply, currentWPctNet }) {
+  if (!confidenceTable) return null;
+  return (
+    <div style={styles.sensitivityTableWrap}>
+      <table style={styles.sensitivityTable}>
+        <thead>
+          <tr>
+            <th style={{ ...styles.sensTh, textAlign: "left" }}>Retiro %<br/>(sobre NW)</th>
+            <th style={styles.sensTh}>USD/año<br/>(p50)</th>
+            <th style={styles.sensTh}>USD/mes<br/>(p50)</th>
+            <th style={styles.sensTh}>Confianza<br/>realizada</th>
+            <th style={styles.sensTh}>99%</th>
+            <th style={styles.sensTh}>95%</th>
+            <th style={styles.sensTh}>90%</th>
+            <th style={styles.sensTh}>Net p10</th>
+            <th style={styles.sensTh}>Net p50</th>
+            <th style={styles.sensTh}>Net p90</th>
+            <th style={styles.sensTh}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {confidenceTable.rows.map((r) => {
+            const isCurrent = Math.abs(r.wPctNet - currentWPctNet) < 1e-6;
+            const tier = r.passes99 ? "positive" : r.passes95 ? "gold" : r.passes90 ? "warn" : "neg";
+            const tierBg =
+              tier === "positive" ? "rgba(45, 94, 58, 0.06)" :
+              tier === "gold"     ? "rgba(184, 146, 58, 0.07)" :
+              tier === "warn"     ? "rgba(201, 122, 46, 0.08)" :
+                                    "rgba(139, 44, 44, 0.06)";
+            return (
+              <tr key={r.wPctNet}
+                style={{
+                  background: isCurrent ? "var(--surface-2)" : tierBg,
+                  outline: isCurrent ? "2px solid var(--ink)" : "none",
+                  cursor: "pointer",
+                }}
+                onClick={() => onApply(r.wPctNet)}>
+                <td style={{ ...styles.sensTd, textAlign: "left", fontWeight: 600 }}>
+                  {fmtPct(r.wPctNet, 2)}
+                  {isCurrent && <span style={styles.sensCurrentBadge}>actual</span>}
+                </td>
+                <td style={styles.sensTd}>{fmtUsd(r.W_year_p50)}</td>
+                <td style={styles.sensTd}>{fmtUsd(r.W_month_p50)}</td>
+                <td style={{ ...styles.sensTd, fontWeight: 600 }}>{fmtPct(r.confidence, 1)}</td>
+                <td style={{ ...styles.sensTd, color: r.passes99 ? "var(--positive)" : "var(--ink-muted)" }}>{r.passes99 ? "✓" : "—"}</td>
+                <td style={{ ...styles.sensTd, color: r.passes95 ? "var(--positive)" : "var(--ink-muted)" }}>{r.passes95 ? "✓" : "—"}</td>
+                <td style={{ ...styles.sensTd, color: r.passes90 ? "var(--positive)" : "var(--ink-muted)" }}>{r.passes90 ? "✓" : "—"}</td>
+                <td style={{ ...styles.sensTd, color: r.netFinal_p10 >= 0 ? "var(--ink-muted)" : "var(--negative)" }}>{fmtUsd(r.netFinal_p10)}</td>
+                <td style={{
+                  ...styles.sensTd, fontWeight: 600,
+                  color: r.netFinal_p50 >= V0 ? "var(--positive)" : r.netFinal_p50 >= 0 ? "var(--ink)" : "var(--negative)",
+                }}>{fmtUsd(r.netFinal_p50)}</td>
+                <td style={{ ...styles.sensTd, color: "var(--positive)" }}>{fmtUsd(r.netFinal_p90)}</td>
+                <td style={styles.sensTd}>
+                  <button onClick={(e) => { e.stopPropagation(); onApply(r.wPctNet); }}
+                    style={styles.sensApplyBtn} disabled={isCurrent}
+                    title={isCurrent ? "Ya activo" : "Aplicar este retiro"}>
+                    {isCurrent ? "✓" : "→"}
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function YearByYearTable({ pledgeResult, T }) {
+  if (!pledgeResult?.yearStats) return null;
+  const stats = pledgeResult.yearStats;
+  const rows = [];
+  let cumW = 0;
+  for (let y = 1; y <= T && y < stats.length; y++) {
+    const s = stats[y];
+    cumW += s.w_p50;
+    rows.push({ ...s, cumW });
+  }
+  return (
+    <div style={styles.monthlyImpactWrap}>
+      <table style={styles.monthlyImpactTable}>
+        <thead>
+          <tr>
+            <th style={styles.miTh}>Año</th>
+            <th style={styles.miTh}>V<br/>(cartera p50)</th>
+            <th style={styles.miTh}>C<br/>(cash p50)</th>
+            <th style={styles.miTh}>L<br/>(préstamo p50)</th>
+            <th style={styles.miTh}>Retiro/año<br/>(p50)</th>
+            <th style={styles.miTh}>Retiro/mes<br/>(promedio)</th>
+            <th style={styles.miTh}>LTV<br/>(p50)</th>
+            <th style={styles.miTh}>NW = V+C−L<br/>(p50)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.year}>
+              <td style={styles.miTdYear}>Año {r.year}</td>
+              <td style={styles.miTd}>{fmtUsd(r.v_p50)}</td>
+              <td style={{ ...styles.miTd, color: r.c_p50 > 0 ? "var(--positive)" : "var(--ink-muted)" }}>{fmtUsd(r.c_p50)}</td>
+              <td style={{ ...styles.miTd, color: "var(--negative)" }}>{fmtUsd(r.l_p50)}</td>
+              <td style={styles.miTd}>{fmtUsd(r.w_p50)}</td>
+              <td style={{ ...styles.miTd, fontWeight: 600 }}>{fmtUsd(r.w_p50 / 12)}</td>
+              <td style={{
+                ...styles.miTd,
+                color: r.ltv_p50 < 50 ? "var(--positive)" : r.ltv_p50 < 65 ? "var(--gold)" : "var(--negative)",
+              }}>{r.ltv_p50.toFixed(1)}%</td>
+              <td style={{
+                ...styles.miTd, fontWeight: 600,
+                color: r.nw_p50 >= (rows[0]?.nw_p50 || 0) ? "var(--positive)" : "var(--negative)",
+              }}>{fmtUsd(r.nw_p50)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ============================================================
+// NET WORTH CHART · bandas Bollinger (mean ± 2σ) + percentiles (p10–p90)
+// La línea principal es la mediana en negro grueso. Una banda gris
+// muestra la dispersión p10–p90 (rango empírico del 80% de paths).
+// Dos líneas punteadas marcan media ± 2σ (Bollinger clásico, ~95% si
+// la distribución fuera normal — útil para detectar skewness/cola).
+// ============================================================
+function NetWorthBollingerChart({ pledgeResult, T, V0Propio }) {
+  if (!pledgeResult?.yearStats) return null;
+  const data = pledgeResult.yearStats.slice(0, T + 1).map(s => ({
+    year: s.year,
+    p10: Math.max(0, s.nw_p10),
+    p50: s.nw_p50,
+    p90: s.nw_p90,
+    mean: s.nw_mean,
+    upper2s: s.nw_upper2s,
+    lower2s: Math.max(0, s.nw_lower2s),
+    band_base: Math.max(0, s.nw_p10),
+    band_width: Math.max(0, s.nw_p90 - Math.max(0, s.nw_p10)),
+  }));
+  return (
+    <div style={styles.chartWrap}>
+      <ResponsiveContainer width="100%" height={380}>
+        <ComposedChart data={data} margin={{ top: 12, right: 24, left: 70, bottom: 30 }}>
+          <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" />
+          <XAxis dataKey="year" stroke="var(--ink-muted)"
+            style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}
+            label={{ value: "Año", position: "insideBottom", offset: -8, fill: "var(--ink-muted)", fontSize: 11 }} />
+          <YAxis stroke="var(--ink-muted)"
+            style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}
+            tickFormatter={(v) => fmtUsdCompact(v)}
+            label={{ value: "Patrimonio neto (USD)", angle: -90, position: "insideLeft", offset: -55, fill: "var(--ink-muted)", fontSize: 11 }} />
+          <Tooltip
+            formatter={(value, name) => [fmtUsd(value), name]}
+            labelFormatter={(y) => `Año ${y}`}
+            contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }} />
+          <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, paddingTop: 8 }} />
+          {/* Banda p10–p90 sombreada (técnica: base invisible + ancho coloreado, stacked) */}
+          <Area type="monotone" dataKey="band_base" stackId="band" stroke="none" fill="transparent" legendType="none" />
+          <Area type="monotone" dataKey="band_width" stackId="band" stroke="none"
+            fill="rgba(45, 94, 58, 0.12)" name="Banda p10–p90" />
+          {/* Bollinger: mean ± 2σ */}
+          <Line type="monotone" dataKey="upper2s" stroke="var(--gold)" strokeWidth={1.2}
+            strokeDasharray="5 4" dot={false} name="Media + 2σ" />
+          <Line type="monotone" dataKey="lower2s" stroke="var(--gold)" strokeWidth={1.2}
+            strokeDasharray="5 4" dot={false} name="Media − 2σ" />
+          {/* Media (aritmética) */}
+          <Line type="monotone" dataKey="mean" stroke="var(--accent)" strokeWidth={1.8}
+            dot={false} name="Media" />
+          {/* Mediana — la curva principal */}
+          <Line type="monotone" dataKey="p50" stroke="var(--ink)" strokeWidth={2.8}
+            dot={false} name="Mediana" />
+          {/* Capital inicial como referencia */}
+          <ReferenceLine y={V0Propio} stroke="var(--ink-muted)" strokeDasharray="2 3"
+            label={{ value: `V₀ = ${fmtUsdCompact(V0Propio)}`, position: "insideTopRight",
+                     fill: "var(--ink-muted)", fontSize: 10 }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ============================================================
+// MARGIN CALL CURVES CHART · LTV mediana a lo largo del horizonte
+// para 5 niveles de retiro (1%, 2%, 3%, 4%, 5%). La línea horizontal
+// punteada marca el umbral de margin call. Cuando una curva cruza
+// arriba, ese retiro tocó el umbral en mediana.
+// ============================================================
+function MarginCallCurvesChart({ marginCallCurves, mcLTV, T }) {
+  if (!marginCallCurves || marginCallCurves.length === 0) return null;
+  // Transformar a formato recharts: array de {year, ltv_1, ltv_2, ...}
+  const data = [];
+  for (let t = 0; t <= T; t++) {
+    const row = { year: t };
+    for (const c of marginCallCurves) {
+      const pct = Math.round(c.wPctNet * 100);
+      row[`ltv_${pct}`] = c.yearStats[t]?.ltv_p50 ?? null;
+    }
+    data.push(row);
+  }
+  // Gradiente cromático: verde (seguro) → rojo (riesgoso)
+  const colors = {
+    1: "#2d7a40",
+    2: "#7aa83a",
+    3: "#b89535",
+    4: "#c97a2e",
+    5: "#a83a35",
+  };
+  return (
+    <div style={styles.chartWrap}>
+      <ResponsiveContainer width="100%" height={400}>
+        <LineChart data={data} margin={{ top: 12, right: 28, left: 50, bottom: 30 }}>
+          <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" />
+          <XAxis dataKey="year" stroke="var(--ink-muted)"
+            style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}
+            label={{ value: "Año", position: "insideBottom", offset: -8, fill: "var(--ink-muted)", fontSize: 11 }} />
+          <YAxis stroke="var(--ink-muted)" domain={[0, "dataMax + 10"]}
+            style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}
+            tickFormatter={(v) => `${v.toFixed(0)}%`}
+            label={{ value: "LTV mediana (L/V, %)", angle: -90, position: "insideLeft", offset: -35, fill: "var(--ink-muted)", fontSize: 11 }} />
+          <Tooltip
+            formatter={(value, name) => [value?.toFixed(1) + "%", name]}
+            labelFormatter={(y) => `Año ${y}`}
+            contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }} />
+          <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, paddingTop: 8 }} />
+          {/* Umbral de margin call */}
+          <ReferenceLine y={mcLTV * 100} stroke="var(--negative)" strokeWidth={1.5} strokeDasharray="6 4"
+            label={{ value: `MARGIN CALL @ ${(mcLTV * 100).toFixed(0)}%`,
+                     position: "insideTopRight", fill: "var(--negative)",
+                     fontSize: 10.5, fontWeight: 700 }} />
+          {marginCallCurves.map(c => {
+            const pct = Math.round(c.wPctNet * 100);
+            const crosses = c.crossYearMedian !== null;
+            return (
+              <Line key={c.wPctNet} type="monotone" dataKey={`ltv_${pct}`}
+                name={`${pct}% retiro${crosses ? ` — cruza año ${c.crossYearMedian}` : ""}`}
+                stroke={colors[pct]} strokeWidth={2.2}
+                dot={false}
+                strokeDasharray={crosses ? "0" : "0"}
+              />
+            );
+          })}
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -8761,6 +8577,220 @@ const styles = {
     marginBottom: 14,
     borderRadius: 2,
   },
+
+  // === V3 HERO + LAYOUT ===
+  pignHero: {
+    borderBottom: "1px solid var(--border)",
+    paddingBottom: 18,
+    marginBottom: 22,
+  },
+  pignHeroTitle: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 38,
+    fontWeight: 600,
+    color: "var(--ink)",
+    margin: 0,
+    lineHeight: 1,
+    letterSpacing: "-0.02em",
+  },
+  pignHeroSub: {
+    fontSize: 13.5,
+    color: "var(--ink-muted)",
+    margin: "8px 0 0",
+    maxWidth: 720,
+    lineHeight: 1.55,
+    fontStyle: "italic",
+  },
+  // V3 HEADLINE — one big banner row with 4 inline metrics + dividers
+  pignHeadlineHero: {
+    display: "grid",
+    gridTemplateColumns: "1fr auto 1fr auto 1fr auto 1fr",
+    background: "var(--surface)",
+    border: "1.5px solid var(--ink)",
+    padding: "22px 26px",
+    marginTop: 22,
+    marginBottom: 26,
+    borderRadius: 2,
+    alignItems: "center",
+  },
+  pignHeadlineItem: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    padding: "0 8px",
+  },
+  pignHeadlineDivider: {
+    width: 1,
+    alignSelf: "stretch",
+    background: "var(--border)",
+    margin: "0 6px",
+  },
+  pignHeadlineLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "var(--ink-muted)",
+    fontWeight: 600,
+  },
+  pignHeadlineValue: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 32,
+    fontWeight: 700,
+    color: "var(--ink)",
+    lineHeight: 1.05,
+    fontVariantNumeric: "tabular-nums",
+    marginTop: 2,
+  },
+  pignHeadlineSub: {
+    fontSize: 11,
+    color: "var(--ink-muted)",
+    marginTop: 2,
+    lineHeight: 1.4,
+  },
+  // V3 CHART SECTIONS
+  pignChartSection: {
+    marginBottom: 28,
+    padding: "20px 22px",
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+  },
+  pignSectionHeader: {
+    marginBottom: 14,
+  },
+  pignSectionTitle: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 22,
+    fontWeight: 600,
+    color: "var(--ink)",
+    margin: 0,
+    lineHeight: 1.1,
+  },
+  pignSectionDesc: {
+    fontSize: 12,
+    color: "var(--ink-muted)",
+    margin: "6px 0 0",
+    lineHeight: 1.55,
+    maxWidth: 900,
+  },
+  // V3 MC CURVE CARDS — uno por nivel de retiro debajo del gráfico
+  mcCurveCards: {
+    display: "grid",
+    gridTemplateColumns: "repeat(5, 1fr)",
+    gap: 10,
+    marginTop: 14,
+  },
+  mcCurveCard: {
+    background: "var(--surface-2)",
+    border: "2px solid",
+    borderRadius: 2,
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    cursor: "pointer",
+    transition: "box-shadow 0.15s, background 0.15s",
+  },
+  mcCurveLabel: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 16,
+    fontWeight: 600,
+    marginBottom: 4,
+  },
+  mcCurveMetric: {
+    display: "flex",
+    justifyContent: "space-between",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    fontVariantNumeric: "tabular-nums",
+  },
+  mcCurveMetricLabel: {
+    color: "var(--ink-muted)",
+  },
+  mcCurveStatus: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    letterSpacing: "0.04em",
+    marginTop: 4,
+    paddingTop: 6,
+    borderTop: "1px dotted var(--border)",
+    fontWeight: 600,
+  },
+  // V3 DETAILS (collapsibles)
+  pignDetails: {
+    marginBottom: 18,
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    padding: "14px 20px",
+    borderRadius: 2,
+  },
+  pignSummary: {
+    cursor: "pointer",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    letterSpacing: "0.04em",
+    color: "var(--ink)",
+    fontWeight: 600,
+    listStyle: "revert",
+  },
+  // V3 MECHANICS EXPLAINER
+  pignMechBox: {
+    background: "var(--surface-2)",
+    borderLeft: "3px solid var(--gold)",
+    padding: "16px 22px",
+    marginTop: 14,
+    borderRadius: 2,
+  },
+  pignMechTitle: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "var(--ink)",
+    fontWeight: 700,
+    marginBottom: 10,
+  },
+  pignMechList: {
+    margin: 0,
+    paddingLeft: 22,
+    fontSize: 12,
+    color: "var(--ink-muted)",
+    lineHeight: 1.7,
+  },
+  // V2: 7 columnas para los 6 sliders + horizon link
+  pignControlsGridV2: {
+    display: "grid",
+    gridTemplateColumns: "repeat(7, 1fr)",
+    gap: 18,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    padding: "18px 22px",
+    marginBottom: 14,
+    borderRadius: 2,
+  },
+  // V2: 4 cards headline en una sola fila
+  pignHeadline: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, 1fr)",
+    gap: 14,
+    marginTop: 14,
+    marginBottom: 18,
+  },
+  // V2: fila con run button + hint a la derecha
+  runRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 16,
+    marginBottom: 18,
+    flexWrap: "wrap",
+  },
+  runHint: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11.5,
+    color: "var(--ink-muted)",
+    letterSpacing: "0.02em",
+  },
   // Mini-card embebido en el grid de controles que muestra el horizonte tomado de la pestaña III
   horizonLink: {
     display: "flex",
@@ -9029,6 +9059,73 @@ const styles = {
     gap: 22,
     flex: 1,
     minWidth: 300,
+  },
+
+  // ============ WITHDRAWAL MODE TOGGLE ============
+  withdrawModeBox: {
+    background: "var(--surface)",
+    border: "1.5px solid var(--ink)",
+    borderRadius: 2,
+    padding: "16px 20px",
+    marginBottom: 18,
+  },
+  withdrawModeHeader: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 14,
+    marginBottom: 12,
+    flexWrap: "wrap",
+  },
+  withdrawModeTitle: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    color: "var(--ink)",
+    fontWeight: 700,
+  },
+  withdrawModeHint: {
+    fontSize: 11.5,
+    color: "var(--ink-muted)",
+    fontStyle: "italic",
+  },
+  withdrawModeOptions: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 14,
+  },
+  withdrawModeOption: {
+    display: "flex",
+    alignItems: "flex-start",
+    padding: "12px 14px",
+    background: "var(--surface-2)",
+    border: "1.5px solid var(--border)",
+    borderRadius: 2,
+    cursor: "pointer",
+    transition: "border-color 0.15s, background 0.15s",
+  },
+  withdrawModeOptionActive: {
+    borderColor: "var(--ink)",
+    background: "var(--surface)",
+    boxShadow: "inset 3px 0 0 var(--ink)",
+  },
+  withdrawModeLabel: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 15,
+    fontWeight: 600,
+    color: "var(--ink)",
+    marginBottom: 4,
+  },
+  withdrawModeDesc: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--ink-muted)",
+    marginBottom: 6,
+  },
+  withdrawModeFormula: {
+    fontSize: 11.5,
+    color: "var(--ink)",
+    lineHeight: 1.5,
   },
   // Heatmap
   heatmapWrap: {

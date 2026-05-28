@@ -814,8 +814,14 @@ function runLeveragedSim({
 }
 
 // ============================================================
-// CONFIDENCE TABLE v4 — sweep de "monto deseado" (USD/mes) vs P(MC)
-// Manteniendo fija la tasa de retiro. Sweep va de 0% a 8% anual de V₀.
+// CONFIDENCE TABLE v5 — PATH SHARING para speedup ~3-5×
+//
+// Como V (cartera) no depende del retiro W (V solo crece por GBM + DCA),
+// los V_paths se pueden generar UNA SOLA VEZ y reusar para todos los
+// niveles del grid. Solo la dinámica del loan/retiro varía entre niveles.
+//
+// Esto reduce el costo de O(grid × N × T × ops_completas) a
+// O(N × T × ops_GBM + grid × N × T × ops_loan).
 // ============================================================
 function runLeveragedConfidenceTable({
   mu, sigma, T, V0Propio = 10000,
@@ -829,28 +835,81 @@ function runLeveragedConfidenceTable({
   for (let p = 0;     p <= 0.005 - 1e-9; p += 0.0005) annualPcts.push(Math.round(p * 100000) / 100000);
   for (let p = 0.005; p <= 0.08  + 1e-9; p += 0.0025) annualPcts.push(Math.round(p * 10000) / 10000);
 
+  const L0 = leverage * V0Propio;
+  const V0 = V0Propio * (1 + leverage);
+  const dcaAnnual = (dcaMonthly || 0) * 12;
+  const drift = mu - 0.5 * sigma * sigma;
+  const diff = sigma;
+
+  // Box–Muller con cache
+  let _spare = null;
+  function randn() {
+    if (_spare !== null) { const r = _spare; _spare = null; return r; }
+    let u = 0, v = 0;
+    while (u === 0) u = Math.random();
+    while (v === 0) v = Math.random();
+    const mag = Math.sqrt(-2 * Math.log(u));
+    _spare = mag * Math.sin(2 * Math.PI * v);
+    return mag * Math.cos(2 * Math.PI * v);
+  }
+
+  // Pre-generar V paths una sola vez (independientes del nivel de retiro)
+  // Float64Array es más rápido que Array regular para acceso secuencial
+  const Vpaths = new Float64Array(N * (T + 1));
+  for (let s = 0; s < N; s++) {
+    Vpaths[s * (T + 1)] = V0;
+    let V = V0;
+    for (let t = 1; t <= T; t++) {
+      V = V * Math.exp(drift + diff * randn()) + dcaAnnual;
+      Vpaths[s * (T + 1) + t] = V;
+    }
+  }
+
   const rows = [];
   for (const annualPct of annualPcts) {
     const W_yearDesired = V0Propio * annualPct;
     const W_monthDesired = W_yearDesired / 12;
-    const sim = runLeveragedSim({
-      mu, sigma, T, V0Propio, leverage, intRate, maintenanceLTV,
-      withdrawalMonthly: W_monthDesired,
-      withdrawalRate, dcaMonthly, N,
-    });
+
+    let mcCount = 0;
+    const netFinal = new Float64Array(N);
+    const avgW = new Float64Array(N);
+
+    for (let s = 0; s < N; s++) {
+      let L = L0;
+      let wSum = 0;
+      let mcTriggered = false;
+      const sOffset = s * (T + 1);
+      for (let t = 1; t <= T; t++) {
+        const V = Vpaths[sOffset + t];
+        const NW_pre = V - L;
+        const W_rate = withdrawalRate * (NW_pre > 0 ? NW_pre : 0);
+        const W = W_rate < W_yearDesired ? W_rate : W_yearDesired;
+        wSum += W;
+        L = L * (1 + intRate) + W;
+        if (!mcTriggered && L / V > maintenanceLTV) mcTriggered = true;
+      }
+      if (mcTriggered) mcCount++;
+      netFinal[s] = Vpaths[sOffset + T] - L;
+      avgW[s] = wSum / T;
+    }
+
+    // Percentiles
+    const netSorted = Array.from(netFinal).sort((a, b) => a - b);
+    const wSorted = Array.from(avgW).sort((a, b) => a - b);
+    const mcProb = mcCount / N;
     rows.push({
       annualPct,
       W_monthDesired,
       W_yearDesired,
-      W_yearActual_p50: sim.avgWithdrawal_p50,    // promedio anual realizado (mediana)
-      mcProb: sim.mcProb,
-      confidence: 1 - sim.mcProb,
-      passes99: sim.mcProb <= 0.01,
-      passes95: sim.mcProb <= 0.05,
-      passes90: sim.mcProb <= 0.10,
-      netFinal_p10: sim.netPatrimony_p10,
-      netFinal_p50: sim.netPatrimony_p50,
-      netFinal_p90: sim.netPatrimony_p90,
+      W_yearActual_p50: wSorted[Math.floor(N * 0.5)],
+      mcProb,
+      confidence: 1 - mcProb,
+      passes99: mcProb <= 0.01,
+      passes95: mcProb <= 0.05,
+      passes90: mcProb <= 0.10,
+      netFinal_p10: netSorted[Math.floor(N * 0.1)],
+      netFinal_p50: netSorted[Math.floor(N * 0.5)],
+      netFinal_p90: netSorted[Math.floor(N * 0.9)],
     });
   }
   const maxAt = (threshold) => {
@@ -2560,26 +2619,48 @@ export default function Calculadora() {
   // Se recompute cuando cambian los parámetros del modelo nuevo.
   // ===========================================================
   // Tablas/curvas pesadas: leen del snapshot dentro de pledgeResult.
-  // Esto evita recálculos en cada keystroke de inputs (monto inicial, DCA, etc).
-  // Solo se recalculan cuando el usuario corre Monte Carlo de nuevo.
-  const confidenceTable = useMemo(() => {
-    if (!pledgeResult?._params) return null;
-    const p = pledgeResult._params;
-    return runLeveragedConfidenceTable({
-      mu: p.mu, sigma: p.sigma, T: p.T, V0Propio: p.V0Propio,
-      leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
-      withdrawalRate: p.withdrawalRate, dcaMonthly: p.dcaMonthly, N: 1500,
-    });
-  }, [pledgeResult]);
+  // Se computan ASÍNCRONAMENTE en useEffect (después del render inicial), así
+  // las headlines y el área chart aparecen inmediatamente sin bloquear el browser.
+  // confidenceTable es lo más caro (~3s) por eso se difiere primero;
+  // marginCallCurves (~0.5s) se computa después.
+  const [confidenceTable, setConfidenceTable] = useState(null);
+  const [marginCallCurves, setMarginCallCurves] = useState(null);
+  const [heavyComputing, setHeavyComputing] = useState(false);
 
-  const marginCallCurves = useMemo(() => {
-    if (!pledgeResult?._params) return null;
+  useEffect(() => {
+    if (!pledgeResult?._params) {
+      setConfidenceTable(null);
+      setMarginCallCurves(null);
+      return;
+    }
+    setConfidenceTable(null);
+    setMarginCallCurves(null);
+    setHeavyComputing(true);
     const p = pledgeResult._params;
-    return runMarginCallCurves({
-      mu: p.mu, sigma: p.sigma, T: p.T, V0Propio: p.V0Propio,
-      leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
-      withdrawalRate: p.withdrawalRate, dcaMonthly: p.dcaMonthly, N: 2000,
-    });
+    // Defer marginCallCurves primero (más rápido) — UX: usuario ve curvas pronto
+    const id1 = setTimeout(() => {
+      try {
+        const mc = runMarginCallCurves({
+          mu: p.mu, sigma: p.sigma, T: p.T, V0Propio: p.V0Propio,
+          leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
+          withdrawalRate: p.withdrawalRate, dcaMonthly: p.dcaMonthly, N: 2000,
+        });
+        setMarginCallCurves(mc);
+      } catch (e) { console.error("marginCallCurves error:", e); }
+    }, 100);
+    // Despues confidenceTable (más caro)
+    const id2 = setTimeout(() => {
+      try {
+        const ct = runLeveragedConfidenceTable({
+          mu: p.mu, sigma: p.sigma, T: p.T, V0Propio: p.V0Propio,
+          leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
+          withdrawalRate: p.withdrawalRate, dcaMonthly: p.dcaMonthly, N: 1500,
+        });
+        setConfidenceTable(ct);
+      } catch (e) { console.error("confidenceTable error:", e); }
+      finally { setHeavyComputing(false); }
+    }, 800);
+    return () => { clearTimeout(id1); clearTimeout(id2); };
   }, [pledgeResult]);
 
   // Detector de parámetros stale — si los live values difieren del snapshot,
@@ -3982,7 +4063,7 @@ export default function Calculadora() {
               {/* HEADLINE — 5 metrics inline incl. beneficio del apalancamiento */}
               <div style={styles.pignHeadlineHero}>
                 <div style={styles.pignHeadlineItem}>
-                  <div style={styles.pignHeadlineLabel}>Patrimonio neto al año {horizon}</div>
+                  <div style={styles.pignHeadlineLabel}>Patrimonio neto al año {pledgeResult._params.T}</div>
                   <div style={styles.pignHeadlineValue}>
                     {fmtUsd(pledgeResult.netPatrimony_p50)}
                   </div>
@@ -4031,15 +4112,15 @@ export default function Calculadora() {
                 </div>
                 <div style={styles.pignHeadlineDivider} />
                 <div style={styles.pignHeadlineItem}>
-                  <div style={styles.pignHeadlineLabel}>LTV al año {horizon}</div>
+                  <div style={styles.pignHeadlineLabel}>LTV al año {pledgeResult._params.T}</div>
                   <div style={{
                     ...styles.pignHeadlineValue,
-                    color: pledgeResult.yearStats[horizon].ltv_p50 < 50 ? "var(--positive)" : pledgeResult.yearStats[horizon].ltv_p50 < 65 ? "var(--gold)" : "var(--negative)",
+                    color: pledgeResult.yearStats[pledgeResult._params.T].ltv_p50 < 50 ? "var(--positive)" : pledgeResult.yearStats[pledgeResult._params.T].ltv_p50 < 65 ? "var(--gold)" : "var(--negative)",
                   }}>
-                    {(pledgeResult.yearStats[horizon].ltv_p50).toFixed(1)}%
+                    {(pledgeResult.yearStats[pledgeResult._params.T].ltv_p50).toFixed(1)}%
                   </div>
                   <div style={styles.pignHeadlineSub}>
-                    inicial {(leverage / (1 + leverage) * 100).toFixed(1)}% · margen al umbral {(mcLTV * 100 - pledgeResult.yearStats[horizon].ltv_p50).toFixed(1)} pp
+                    inicial {(leverage / (1 + leverage) * 100).toFixed(1)}% · margen al umbral {(mcLTV * 100 - pledgeResult.yearStats[pledgeResult._params.T].ltv_p50).toFixed(1)} pp
                   </div>
                 </div>
               </div>
@@ -4054,7 +4135,7 @@ export default function Calculadora() {
                     Con leverage 0% y retiro $0, debe coincidir con el escenario neutro de la pestaña III.
                   </p>
                 </div>
-                <NetWorthAreaChart pledgeResult={pledgeResult} T={horizon} V0Propio={V0_eff} />
+                <NetWorthAreaChart pledgeResult={pledgeResult} T={pledgeResult._params.T} V0Propio={V0_eff} />
               </div>
 
               {/* GRÁFICO 2 — ¿CUÁNDO TOCO EL UMBRAL? */}
@@ -4072,7 +4153,7 @@ export default function Calculadora() {
                 {!marginCallCurves ? (
                   <div style={styles.placeholder}>Calculando curvas…</div>
                 ) : (
-                  <MarginCallCurvesChart marginCallCurves={marginCallCurves} mcLTV={mcLTV} T={horizon} />
+                  <MarginCallCurvesChart marginCallCurves={marginCallCurves} mcLTV={mcLTV} T={pledgeResult._params.T} />
                 )}
                 {marginCallCurves && (
                   <div style={styles.mcCurveCards}>
@@ -4095,7 +4176,7 @@ export default function Calculadora() {
                             </span>
                           </div>
                           <div style={styles.mcCurveMetric}>
-                            <span style={styles.mcCurveMetricLabel}>LTV año {horizon}:</span>
+                            <span style={styles.mcCurveMetricLabel}>LTV año {pledgeResult._params.T}:</span>
                             <span style={{ fontWeight: 600, fontSize: 10.5 }}>
                               {c.ltv_p50_final.toFixed(1)}% / {c.ltv_p90_final.toFixed(1)}%
                             </span>
@@ -4148,7 +4229,7 @@ export default function Calculadora() {
                   Detalle año por año · V, L, retiro realizado, % efectivo, LTV, NW
                 </summary>
                 <div style={{ marginTop: 14 }}>
-                  <YearByYearTable pledgeResult={pledgeResult} T={horizon} V0Propio={V0_eff} />
+                  <YearByYearTable pledgeResult={pledgeResult} T={pledgeResult._params.T} V0Propio={V0_eff} />
                 </div>
               </details>
 
@@ -4165,9 +4246,9 @@ export default function Calculadora() {
                 </ol>
                 <div style={{ ...styles.pignMechTitle, marginTop: 14 }}>Sanity check</div>
                 <div style={{ fontSize: 12, color: "var(--ink-muted)", lineHeight: 1.55 }}>
-                  Con <code>leverage = 0%</code> y <code>retiro = $0</code>, el patrimonio neto mediano al año {horizon} debe
+                  Con <code>leverage = 0%</code> y <code>retiro = $0</code>, el patrimonio neto mediano al año {pledgeResult._params.T} debe
                   coincidir con el escenario neutro de la pestaña III: <code>V₀ × exp((μ − σ²/2) × T)</code> + aportes DCA.
-                  Eso es <strong>{fmtUsd(V0_eff * Math.exp((mu - 0.5 * sigma * sigma) * horizon))}</strong> ignorando DCA.
+                  Eso es <strong>{fmtUsd(V0_eff * Math.exp((mu - 0.5 * sigma * sigma) * pledgeResult._params.T))}</strong> ignorando DCA.
                 </div>
               </div>
             </>
@@ -5704,12 +5785,12 @@ function NetWorthAreaChart({ pledgeResult, T, V0Propio }) {
             contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }} />
           <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, paddingTop: 8 }}
             payload={[
-              { value: "p10–p25 (muy pesimista)", type: "square", color: "rgba(139, 44, 44, 0.18)" },
-              { value: "p25–p50 (pesimista)",     type: "square", color: "rgba(184, 146, 58, 0.22)" },
-              { value: "p50–p75 (optimista)",     type: "square", color: "rgba(184, 146, 58, 0.22)" },
-              { value: "p75–p90 (muy optimista)", type: "square", color: "rgba(45, 94, 58, 0.18)" },
-              { value: "Mediana (con apalancamiento)", type: "line", color: "var(--ink)" },
-              ...(showBaseline ? [{ value: "Mediana sin apalancamiento (lev=0%)", type: "line", color: "var(--accent)" }] : []),
+              { value: "p10–p25 (muy pesimista)", type: "square", color: "rgba(139, 44, 44, 0.18)", payload: { strokeDasharray: "0" } },
+              { value: "p25–p50 (pesimista)",     type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
+              { value: "p50–p75 (optimista)",     type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
+              { value: "p75–p90 (muy optimista)", type: "square", color: "rgba(45, 94, 58, 0.18)", payload: { strokeDasharray: "0" } },
+              { value: "Mediana (con apalancamiento)", type: "line", color: "var(--ink)", payload: { strokeDasharray: "0" } },
+              ...(showBaseline ? [{ value: "Mediana sin apalancamiento (lev=0%)", type: "line", color: "var(--accent)", payload: { strokeDasharray: "6 4" } }] : []),
             ]} />
           <Area type="monotone" dataKey="base" stackId="band" stroke="none" fill="transparent" legendType="none" name="base" />
           <Area type="monotone" dataKey="band_10_25" stackId="band" stroke="none"
@@ -5776,8 +5857,11 @@ function MarginCallCurvesChart({ marginCallCurves, mcLTV, T }) {
               ...marginCallCurves.map((c, i) => ({
                 value: `${c.label} · ${fmtUsdCompact(c.monthly)}/mes`,
                 type: "line", color: colors[i],
+                payload: { strokeDasharray: "0" },
               })),
-              { value: "── mediana (p50)  ┄┄ stress (p90)", type: "plainline", color: "var(--ink-muted)" },
+              { value: "── sólida: mediana   ┄┄ punteada: stress p90",
+                type: "line", color: "var(--ink-muted)",
+                payload: { strokeDasharray: "0" } },
             ]} />
           <ReferenceLine y={mcLTV * 100} stroke="var(--negative)" strokeWidth={1.5} strokeDasharray="6 4"
             label={{ value: `MARGIN CALL @ ${(mcLTV * 100).toFixed(0)}%`,

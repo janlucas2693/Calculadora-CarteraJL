@@ -704,13 +704,14 @@ function runLeveragedSim({
   maintenanceLTV = 0.70,
   withdrawalMonthly = 0,
   withdrawalRate = 0.04,
+  inflationRate = 0.03,
   dcaMonthly = 0,
   N = 3000,
 }) {
   // Estado inicial
   const L0 = leverage * V0Propio;
   const V0 = V0Propio * (1 + leverage);
-  const W_desired_annual = (withdrawalMonthly || 0) * 12;
+  const W_desired_annual_0 = (withdrawalMonthly || 0) * 12;   // año 1
   const dcaAnnual = (dcaMonthly || 0) * 12;
   const drift = mu - 0.5 * sigma * sigma;
   const diff = sigma;
@@ -749,9 +750,10 @@ function runLeveragedSim({
       const V_new = V * Math.exp(drift + diff * Z) + dcaAnnual;
       // NW post-crecimiento, pre-retiro
       const NW_pre = V_new - L;
-      // Retiro: el MENOR entre tasa×NW y monto deseado
+      // Retiro: el MENOR entre tasa×NW y techo deseado (que crece con inflación)
+      const W_desired_t = W_desired_annual_0 * Math.pow(1 + inflationRate, t - 1);
       const W_rate = withdrawalRate * Math.max(NW_pre, 0);
-      const W = Math.max(0, Math.min(W_rate, W_desired_annual));
+      const W = Math.max(0, Math.min(W_rate, W_desired_t));
       // Préstamo: interés + retiro nuevo
       const L_new = L * (1 + intRate) + W;
       V = V_new; L = L_new;
@@ -801,7 +803,8 @@ function runLeveragedSim({
   return {
     V0Propio, L0, V0,
     T,
-    W_desired_annual,
+    W_desired_annual_0,
+    inflationRate,
     mcProb: mcCount / N,
     avgMCTime: mcYears.length ? mcYears.reduce((a, b) => a + b, 0) / mcYears.length : null,
     netPatrimony_p10: nw10F, netPatrimony_p50: nw50F, netPatrimony_p90: nw90F,
@@ -827,6 +830,7 @@ function runLeveragedConfidenceTable({
   leverage = 0.30, intRate = 0.045,
   maintenanceLTV = 0.70,
   withdrawalRate = 0.04,
+  inflationRate = 0.03,
   dcaMonthly = 0,
   N = 1500,
 }) {
@@ -882,7 +886,8 @@ function runLeveragedConfidenceTable({
         const V = Vpaths[sOffset + t];
         const NW_pre = V - L;
         const W_rate = withdrawalRate * (NW_pre > 0 ? NW_pre : 0);
-        const W = W_rate < W_yearDesired ? W_rate : W_yearDesired;
+        const W_desired_t = W_yearDesired * Math.pow(1 + inflationRate, t - 1);
+        const W = W_rate < W_desired_t ? W_rate : W_desired_t;
         wSum += W;
         L = L * (1 + intRate) + W;
         if (!mcTriggered && L / V > maintenanceLTV) mcTriggered = true;
@@ -928,30 +933,30 @@ function runLeveragedConfidenceTable({
 }
 
 // ============================================================
-// MARGIN CALL CURVES v5 — 5 niveles FIJOS del 1% al 5% V₀ anual.
-// Para cada nivel, devuelve la trayectoria de LTV mediana (p50) Y p90
-// (escenario estresado). El umbral de margin call se cruza en p50 si
-// el escenario típico ya es insostenible; se cruza en p90 si el 10%
-// peor de paths lo es. La diferencia entre p50 y p90 es el "rango" de
-// riesgo asociado a ese retiro.
+// MARGIN CALL CURVES v6 — 5 niveles FIJOS de TASA DE RETIRO (1%-5%).
+// El TECHO (monto deseado USD) se mantiene FIJO en lo que pide el usuario.
+// Cada año el retiro real es min(tasa × NW, techo) — gana el menor.
+// En años tempranos típicamente domina la tasa; en años tardíos el techo.
 // ============================================================
 function runMarginCallCurves({
   mu, sigma, T, V0Propio = 10000,
   leverage = 0.30, intRate = 0.045,
   maintenanceLTV = 0.70,
-  withdrawalRate = 0.04,
+  withdrawalMonthly = 0,
+  inflationRate = 0.03,
   dcaMonthly = 0,
   N = 2000,
 }) {
-  // GRID FIJO — no depende del monto deseado del usuario
-  const annualPcts = [0.01, 0.02, 0.03, 0.04, 0.05];
-  const monthlyAmounts = annualPcts.map(p => V0Propio * p / 12);
+  // GRID FIJO de TASAS — el techo (deseado del usuario) no cambia
+  const rateGrid = [0.01, 0.02, 0.03, 0.04, 0.05];
 
-  return monthlyAmounts.map((monthly, idx) => {
+  return rateGrid.map((rate, idx) => {
     const sim = runLeveragedSim({
       mu, sigma, T, V0Propio, leverage, intRate, maintenanceLTV,
-      withdrawalMonthly: monthly,
-      withdrawalRate, dcaMonthly, N,
+      withdrawalMonthly,                // techo año 1 (crece con inflación)
+      withdrawalRate: rate,             // tasa variable
+      inflationRate,
+      dcaMonthly, N,
     });
     const mcLTVPct = maintenanceLTV * 100;
     let crossYearP50 = null;
@@ -961,16 +966,15 @@ function runMarginCallCurves({
       if (crossYearP99 === null && sim.yearStats[t].ltv_p99 >= mcLTVPct) crossYearP99 = t;
     }
     return {
-      monthly,
-      annualPct: annualPcts[idx],
-      yearlyDesired: monthly * 12,
-      label: fmtPctStatic(annualPcts[idx], 0) + " V₀",
+      rate,
+      withdrawalMonthly,                                       // techo (mismo en los 5)
+      avgMonthly_p50: (sim.avgWithdrawal_p50 || 0) / 12,       // retiro mediana real realizado
+      label: `tasa ${(rate * 100).toFixed(0)}%`,
       mcProb: sim.mcProb,
       crossYearMedian: crossYearP50,
       crossYearStress: crossYearP99,
       yearStats: sim.yearStats,
       netFinal_p50: sim.netPatrimony_p50,
-      avgWithdrawal_p50: sim.avgWithdrawal_p50,
       ltv_p50_final: sim.yearStats[T]?.ltv_p50 ?? 0,
       ltv_p99_final: sim.yearStats[T]?.ltv_p99 ?? 0,
     };
@@ -2604,6 +2608,7 @@ export default function Calculadora() {
         leverage, intRate, maintenanceLTV: mcLTV,
         withdrawalMonthly: withdrawalMonthly_eff,
         withdrawalRate, dcaMonthly: dcaMonthly_eff,
+        inflationRate: 0.03,            // fijo 3% anual — techo USD crece para preservar poder adquisitivo
       };
       const sim = runLeveragedSim({ ...params, N: 10000 });
       const simNoLev = runLeveragedSim({ ...params, leverage: 0, N: 10000 });
@@ -2642,7 +2647,8 @@ export default function Calculadora() {
         const mc = runMarginCallCurves({
           mu: p.mu, sigma: p.sigma, T: p.T, V0Propio: p.V0Propio,
           leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
-          withdrawalRate: p.withdrawalRate, dcaMonthly: p.dcaMonthly, N: 2000,
+          withdrawalMonthly: p.withdrawalMonthly, inflationRate: p.inflationRate,
+          dcaMonthly: p.dcaMonthly, N: 2000,
         });
         setMarginCallCurves(mc);
       } catch (e) { console.error("marginCallCurves error:", e); }
@@ -2653,7 +2659,8 @@ export default function Calculadora() {
         const ct = runLeveragedConfidenceTable({
           mu: p.mu, sigma: p.sigma, T: p.T, V0Propio: p.V0Propio,
           leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
-          withdrawalRate: p.withdrawalRate, dcaMonthly: p.dcaMonthly, N: 1500,
+          withdrawalRate: p.withdrawalRate, inflationRate: p.inflationRate,
+          dcaMonthly: p.dcaMonthly, N: 1500,
         });
         setConfidenceTable(ct);
       } catch (e) { console.error("confidenceTable error:", e); }
@@ -3982,8 +3989,11 @@ export default function Calculadora() {
                 <span style={styles.withdrawalHeroSuffix}>/mes</span>
               </div>
               <div style={styles.withdrawalHeroDesc}>
-                Cada año retiras el <strong>menor</strong> entre <code>{fmtPct(withdrawalRate, 1)} × NW</code> y <strong>{fmtUsd(withdrawalMonthly_eff)}/mes</strong>.
-                Al inicio domina la tasa (NW chico → retiro chico, preservás capital). Cuando la cartera crece y <code>{fmtPct(withdrawalRate, 1)} × NW &gt; ${withdrawalMonthly_eff}</code>, se activa el techo.
+                Cada año retirás el <strong>menor</strong> entre <code>{fmtPct(withdrawalRate, 1)} × NW</code> y el techo USD,
+                que crece <strong>3%/año con inflación</strong> para preservar poder adquisitivo.
+                Año 1: <strong>{fmtUsd(withdrawalMonthly_eff)}/mes</strong>.
+                Año {horizon}: <strong>{fmtUsd(withdrawalMonthly_eff * Math.pow(1.03, horizon - 1))}/mes</strong> (techo nominal).
+                Al inicio domina la tasa; cuando la cartera crece, domina el techo.
               </div>
             </div>
             <div style={styles.withdrawalHeroRight}>
@@ -3991,19 +4001,22 @@ export default function Calculadora() {
               <div style={styles.withdrawalHeroRatioValue}>
                 {withdrawalMonthly_eff > 0 && withdrawalRate > 0 && V0_eff > 0
                   ? (() => {
-                      // Estimar año en que rate × NW(t) iguala desired, asumiendo crecimiento mediano sin retiros
-                      const NW_target = withdrawalMonthly_eff * 12 / withdrawalRate;
+                      // Cruce: rate × NW(t) = techo(t) considerando inflación
+                      // NW(t) ≈ V₀ × exp(driftMedian × t), techo(t) = techo₀ × (1+infl)^t
+                      const techo0 = withdrawalMonthly_eff * 12;
                       const muEff = mu + leverage * (mu - intRate);
                       const driftMedian = muEff - 0.5 * sigma * sigma;
-                      const yearCross = NW_target > V0_eff && driftMedian > 0
-                        ? Math.log(NW_target / V0_eff) / driftMedian
+                      const effDrift = driftMedian - Math.log(1.03);
+                      const target = techo0 / (withdrawalRate * V0_eff);
+                      const yearCross = target > 1 && effDrift > 0
+                        ? Math.log(target) / effDrift
                         : 0;
                       return yearCross > 0 && yearCross < 100 ? `año ${yearCross.toFixed(1)}` : "—";
                     })()
                   : "—"}
               </div>
               <div style={styles.withdrawalHeroRatioDesc}>
-                cuando NW × {fmtPct(withdrawalRate, 1)} = {fmtUsd(withdrawalMonthly_eff * 12)}/año (estimación mediana)
+                cuando tasa × NW = techo (mediana), considerando inflación 3%
               </div>
             </div>
           </div>
@@ -4147,11 +4160,15 @@ export default function Calculadora() {
                 <div style={styles.pignSectionHeader}>
                   <h3 style={styles.pignSectionTitle}>¿Cuándo toco el margin call?</h3>
                   <p style={styles.pignSectionDesc}>
-                    Trayectoria de la LTV para 5 niveles fijos de monto deseado: <strong>1%, 2%, 3%, 4%, 5% de V₀ anual</strong>
-                    (independientes de tu input). Cada nivel tiene <strong>dos líneas del mismo color</strong>:
-                    <strong> sólida = mediana</strong> (escenario neutro) y <strong>punteada = p99</strong> (escenario extremo, peor 1%).
-                    Si la línea sólida cruza el umbral rojo, el retiro es insostenible en mediana.
-                    <strong> Si la punteada NO cruza, estás seguro al 99%</strong> — solo 1 de cada 100 escenarios tocaría margin call.
+                    Trayectoria de la LTV para 5 niveles fijos de <strong>tasa de retiro</strong>:
+                    {" "}<strong>1%, 2%, 3%, 4%, 5% del NW</strong>.
+                    Tu monto deseado (techo USD) parte en <strong>{fmtUsd(withdrawalMonthly_eff)}/mes año 1</strong> y crece 3%/año con inflación{" "}
+                    (llega a <strong>{fmtUsd(withdrawalMonthly_eff * Math.pow(1.03, (pledgeResult?._params?.T || horizon) - 1))}/mes al año {pledgeResult?._params?.T || horizon}</strong>).
+                    Cada año el retiro real es <code>min(tasa × NW, techo_t)</code>.
+                    En años tempranos típicamente domina la tasa; cuando la cartera crece más rápido que la inflación, domina el techo.
+                    Cada nivel tiene <strong>dos líneas del mismo color</strong>:
+                    <strong> sólida = mediana</strong> y <strong>punteada = p99</strong> (peor 1%).
+                    <strong> Si la punteada NO cruza, estás seguro al 99%</strong>.
                   </p>
                 </div>
                 {!marginCallCurves ? (
@@ -4165,14 +4182,16 @@ export default function Calculadora() {
                       const colors = ["#2d7a40", "#7aa83a", "#b89535", "#c97a2e", "#a83a35"];
                       const crossesMedian = c.crossYearMedian !== null;
                       const crossesStress = c.crossYearStress !== null;
+                      const isCurrent = Math.abs(c.rate - withdrawalRate) < 1e-6;
                       return (
                         <div key={idx} style={{
                           ...styles.mcCurveCard,
                           borderColor: colors[idx],
+                          ...(isCurrent ? { background: "var(--surface-2)", boxShadow: "inset 0 0 0 2px var(--ink)" } : {}),
                         }}
-                        onClick={() => { setWithdrawalMonthly(String(Math.round(c.monthly))); setTimeout(() => runPledge(), 60); }}>
+                        onClick={() => { setWithdrawalRate(c.rate); setTimeout(() => runPledge(), 60); }}>
                           <div style={{ ...styles.mcCurveLabel, color: colors[idx] }}>{c.label}</div>
-                          <div style={styles.mcCurveSubLabel}>{fmtUsd(c.monthly)}/mes deseado</div>
+                          <div style={styles.mcCurveSubLabel}>realizado p50: {fmtUsd(c.avgMonthly_p50)}/mes</div>
                           <div style={styles.mcCurveMetric}>
                             <span style={styles.mcCurveMetricLabel}>P(MC):</span>
                             <span style={{ fontWeight: 600, color: c.mcProb < 0.05 ? "var(--positive)" : c.mcProb < 0.10 ? "var(--gold)" : "var(--negative)" }}>
@@ -4243,8 +4262,9 @@ export default function Calculadora() {
                 <ol style={styles.pignMechList}>
                   <li>La cartera <strong>V</strong> crece por GBM: <code>V × exp((μ − σ²/2) + σZ)</code> + DCA</li>
                   <li>Patrimonio neto pre-retiro: <code>NW = V − L</code></li>
-                  <li>Retiro del año: <code>W = min({fmtPct(withdrawalRate, 1)} × NW, {fmtUsd(withdrawalMonthly_eff * 12)}/año)</code> — el <strong>menor</strong></li>
-                  <li>Préstamo: <code>L_t = L_(t−1) × (1 + {fmtPct(intRate, 2)}) + W</code></li>
+                  <li>Techo del retiro año t: <code>techo_t = {fmtUsd(withdrawalMonthly_eff * 12)} × (1 + 3%)^(t−1)</code> (crece con inflación)</li>
+                  <li>Retiro del año: <code>W_t = min({fmtPct(withdrawalRate, 1)} × NW, techo_t)</code> — el <strong>menor</strong></li>
+                  <li>Préstamo: <code>L_t = L_(t−1) × (1 + {fmtPct(intRate, 2)}) + W_t</code></li>
                   <li>Margin call si <code>L_t / V_t &gt; {fmtPct(mcLTV, 0)}</code></li>
                   <li>Patrimonio neto al cierre: <code>NW_t = V_t − L_t</code></li>
                 </ol>
@@ -5867,7 +5887,7 @@ function MarginCallCurvesChart({ marginCallCurves, mcLTV, T }) {
           <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, paddingTop: 8 }}
             payload={[
               ...marginCallCurves.map((c, i) => ({
-                value: `${c.label} · ${fmtUsdCompact(c.monthly)}/mes`,
+                value: `${c.label} · realizado p50 ${fmtUsdCompact(c.avgMonthly_p50)}/mes`,
                 type: "line", color: colors[i],
                 payload: { strokeDasharray: "0" },
               })),

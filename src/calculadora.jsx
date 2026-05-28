@@ -773,17 +773,16 @@ function runLeveragedSim({
   for (let t = 0; t <= T; t++) {
     const [v10, v50, v90] = percentiles(V_t[t]);
     const [l10, l50, l90] = percentiles(L_t[t]);
-    const [nw10, nw50, nw90] = percentiles(NW_t[t]);
     const [w10, w50, w90] = percentiles(W_t[t]);
-    const [ltv10, ltv50, ltv90] = percentiles(LTV_t[t]);
-    const [nw25, , nw75] = percentiles(NW_t[t], [0.25, 0.50, 0.75]);
+    const [ltv10, ltv50, ltv90, ltv99] = percentiles(LTV_t[t], [0.10, 0.50, 0.90, 0.99]);
+    const [nw1, nw10, nw25, nw50, nw75, nw90, nw99] = percentiles(NW_t[t], [0.01, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99]);
     yearStats.push({
       year: t,
       v_p10: v10, v_p50: v50, v_p90: v90,
       l_p10: l10, l_p50: l50, l_p90: l90,
-      nw_p10: nw10, nw_p25: nw25, nw_p50: nw50, nw_p75: nw75, nw_p90: nw90,
+      nw_p1: nw1, nw_p10: nw10, nw_p25: nw25, nw_p50: nw50, nw_p75: nw75, nw_p90: nw90, nw_p99: nw99,
       w_p10: w10, w_p50: w50, w_p90: w90,
-      ltv_p10: ltv10 * 100, ltv_p50: ltv50 * 100, ltv_p90: ltv90 * 100,
+      ltv_p10: ltv10 * 100, ltv_p50: ltv50 * 100, ltv_p90: ltv90 * 100, ltv_p99: ltv99 * 100,
     });
   }
 
@@ -956,10 +955,10 @@ function runMarginCallCurves({
     });
     const mcLTVPct = maintenanceLTV * 100;
     let crossYearP50 = null;
-    let crossYearP90 = null;
+    let crossYearP99 = null;
     for (let t = 1; t < sim.yearStats.length; t++) {
       if (crossYearP50 === null && sim.yearStats[t].ltv_p50 >= mcLTVPct) crossYearP50 = t;
-      if (crossYearP90 === null && sim.yearStats[t].ltv_p90 >= mcLTVPct) crossYearP90 = t;
+      if (crossYearP99 === null && sim.yearStats[t].ltv_p99 >= mcLTVPct) crossYearP99 = t;
     }
     return {
       monthly,
@@ -968,12 +967,12 @@ function runMarginCallCurves({
       label: fmtPctStatic(annualPcts[idx], 0) + " V₀",
       mcProb: sim.mcProb,
       crossYearMedian: crossYearP50,
-      crossYearStress: crossYearP90,
+      crossYearStress: crossYearP99,
       yearStats: sim.yearStats,
       netFinal_p50: sim.netPatrimony_p50,
       avgWithdrawal_p50: sim.avgWithdrawal_p50,
       ltv_p50_final: sim.yearStats[T]?.ltv_p50 ?? 0,
-      ltv_p90_final: sim.yearStats[T]?.ltv_p90 ?? 0,
+      ltv_p99_final: sim.yearStats[T]?.ltv_p99 ?? 0,
     };
   });
 }
@@ -2606,8 +2605,8 @@ export default function Calculadora() {
         withdrawalMonthly: withdrawalMonthly_eff,
         withdrawalRate, dcaMonthly: dcaMonthly_eff,
       };
-      const sim = runLeveragedSim({ ...params, N: 3000 });
-      const simNoLev = runLeveragedSim({ ...params, leverage: 0, N: 3000 });
+      const sim = runLeveragedSim({ ...params, N: 10000 });
+      const simNoLev = runLeveragedSim({ ...params, leverage: 0, N: 10000 });
       setPledgeResult({ ...sim, baseline: simNoLev, _params: params });
       setPledgeRunning(false);
     }, 50);
@@ -4045,7 +4044,7 @@ export default function Calculadora() {
             <span style={styles.runHint}>
               μ <strong>{fmtPct(mu, 2)}</strong> · σ <strong>{fmtPct(sigma, 2)}</strong>
               {dcaMonthly_eff > 0 && <> · DCA <strong>{fmtUsd(dcaMonthly_eff)}/mes</strong></>}
-              {" · "}3,000 paths MC
+              {" · "}10,000 paths MC
               {paramsStale && (
                 <span style={styles.staleBadge}>
                   Parámetros cambiados desde la última simulación
@@ -4068,7 +4067,10 @@ export default function Calculadora() {
                     {fmtUsd(pledgeResult.netPatrimony_p50)}
                   </div>
                   <div style={styles.pignHeadlineSub}>
-                    <strong>{(pledgeResult.netPatrimony_p50 / V0_eff).toFixed(2)}×</strong> sobre tu capital inicial
+                    <strong>{(pledgeResult.netPatrimony_p50 / V0_eff).toFixed(2)}×</strong> capital inicial
+                    {pledgeResult.yearStats[pledgeResult._params.T]?.nw_p1 !== undefined && (
+                      <> · peor 1%: <strong style={{ color: "var(--negative)" }}>{fmtUsdCompact(Math.max(0, pledgeResult.yearStats[pledgeResult._params.T].nw_p1))}</strong></>
+                    )}
                   </div>
                 </div>
                 <div style={styles.pignHeadlineDivider} />
@@ -4130,9 +4132,11 @@ export default function Calculadora() {
                 <div style={styles.pignSectionHeader}>
                   <h3 style={styles.pignSectionTitle}>Patrimonio neto a lo largo del tiempo · por escenario</h3>
                   <p style={styles.pignSectionDesc}>
-                    Bandas concéntricas muestran los 5 escenarios — la zona más clara contiene el 80% de las simulaciones
-                    (p10–p90), las zonas más anchas son menos probables. La línea negra es la <strong>mediana (escenario neutro)</strong>.
-                    Con leverage 0% y retiro $0, debe coincidir con el escenario neutro de la pestaña III.
+                    Bandas concéntricas muestran 7 escenarios — desde la <strong>cola extrema p1 (peor 1%)</strong>
+                    hasta la <strong>cola extrema p99 (mejor 1%)</strong>, capturando 98% de los caminos simulados.
+                    La banda más clara abajo es el <strong>peor escenario al 99% de confianza</strong>: tu NW al año T
+                    no debería ser inferior al valor de esa banda con probabilidad del 99%.
+                    Con leverage 0% y retiro $0, la mediana debe coincidir con el escenario neutro de la pestaña III.
                   </p>
                 </div>
                 <NetWorthAreaChart pledgeResult={pledgeResult} T={pledgeResult._params.T} V0Propio={V0_eff} />
@@ -4145,9 +4149,9 @@ export default function Calculadora() {
                   <p style={styles.pignSectionDesc}>
                     Trayectoria de la LTV para 5 niveles fijos de monto deseado: <strong>1%, 2%, 3%, 4%, 5% de V₀ anual</strong>
                     (independientes de tu input). Cada nivel tiene <strong>dos líneas del mismo color</strong>:
-                    <strong> sólida = mediana</strong> (escenario neutro) y <strong>punteada = p90</strong> (escenario estresado, 10% peor).
+                    <strong> sólida = mediana</strong> (escenario neutro) y <strong>punteada = p99</strong> (escenario extremo, peor 1%).
                     Si la línea sólida cruza el umbral rojo, el retiro es insostenible en mediana.
-                    Si solo cruza la punteada, hay riesgo de margin call en los peores escenarios pero la mediana sobrevive.
+                    <strong> Si la punteada NO cruza, estás seguro al 99%</strong> — solo 1 de cada 100 escenarios tocaría margin call.
                   </p>
                 </div>
                 {!marginCallCurves ? (
@@ -4178,7 +4182,7 @@ export default function Calculadora() {
                           <div style={styles.mcCurveMetric}>
                             <span style={styles.mcCurveMetricLabel}>LTV año {pledgeResult._params.T}:</span>
                             <span style={{ fontWeight: 600, fontSize: 10.5 }}>
-                              {c.ltv_p50_final.toFixed(1)}% / {c.ltv_p90_final.toFixed(1)}%
+                              {c.ltv_p50_final.toFixed(1)}% / {c.ltv_p99_final.toFixed(1)}%
                             </span>
                           </div>
                           <div style={styles.mcCurveMetric}>
@@ -4192,8 +4196,8 @@ export default function Calculadora() {
                             {crossesMedian
                               ? `⚠ Mediana cruza año ${c.crossYearMedian}`
                               : crossesStress
-                                ? `△ p90 cruza año ${c.crossYearStress}`
-                                : "✓ Ni mediana ni p90 cruzan"}
+                                ? `△ p99 cruza año ${c.crossYearStress}`
+                                : "✓ Ni mediana ni p99 cruzan"}
                           </div>
                         </div>
                       );
@@ -5746,27 +5750,31 @@ function NetWorthAreaChart({ pledgeResult, T, V0Propio }) {
   if (!pledgeResult?.yearStats) return null;
   const baselineStats = pledgeResult.baseline?.yearStats;
   const data = pledgeResult.yearStats.slice(0, T + 1).map((s, idx) => {
+    const p1  = Math.max(0, s.nw_p1);
     const p10 = Math.max(0, s.nw_p10);
     const p25 = Math.max(0, s.nw_p25);
     const p75 = Math.max(0, s.nw_p75);
     const p90 = Math.max(0, s.nw_p90);
+    const p99 = Math.max(0, s.nw_p99);
     const baseline = baselineStats?.[idx]?.nw_p50 ?? null;
     return {
       year: s.year,
-      band_10_25: p25 - p10,
-      band_25_50: s.nw_p50 - p25,
-      band_50_75: p75 - s.nw_p50,
-      band_75_90: p90 - p75,
-      base: p10,
+      base: p1,                            // base = p1 (la cola más pesimista)
+      band_1_10:   p10 - p1,               // 1-10% paths: muy pesimista
+      band_10_25:  p25 - p10,
+      band_25_50:  s.nw_p50 - p25,
+      band_50_75:  p75 - s.nw_p50,
+      band_75_90:  p90 - p75,
+      band_90_99:  p99 - p90,              // 90-99% paths: muy optimista
       p50: s.nw_p50,
       baseline_p50: baseline,
-      p10, p25, p75, p90,
+      p1, p10, p25, p75, p90, p99,
     };
   });
   const showBaseline = baselineStats !== undefined && baselineStats !== null;
   return (
     <div style={styles.chartWrap}>
-      <ResponsiveContainer width="100%" height={400}>
+      <ResponsiveContainer width="100%" height={420}>
         <ComposedChart data={data} margin={{ top: 12, right: 24, left: 70, bottom: 30 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" />
           <XAxis dataKey="year" stroke="var(--ink-muted)"
@@ -5785,14 +5793,19 @@ function NetWorthAreaChart({ pledgeResult, T, V0Propio }) {
             contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }} />
           <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, paddingTop: 8 }}
             payload={[
-              { value: "p10–p25 (muy pesimista)", type: "square", color: "rgba(139, 44, 44, 0.18)", payload: { strokeDasharray: "0" } },
-              { value: "p25–p50 (pesimista)",     type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
-              { value: "p50–p75 (optimista)",     type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
-              { value: "p75–p90 (muy optimista)", type: "square", color: "rgba(45, 94, 58, 0.18)", payload: { strokeDasharray: "0" } },
+              { value: "p1–p10 (peor 1-10% · cola extrema)", type: "square", color: "rgba(139, 44, 44, 0.10)", payload: { strokeDasharray: "0" } },
+              { value: "p10–p25 (pesimista)",  type: "square", color: "rgba(139, 44, 44, 0.18)", payload: { strokeDasharray: "0" } },
+              { value: "p25–p50",              type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
+              { value: "p50–p75",              type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
+              { value: "p75–p90 (optimista)",  type: "square", color: "rgba(45, 94, 58, 0.18)", payload: { strokeDasharray: "0" } },
+              { value: "p90–p99 (mejor 90-99% · cola extrema)", type: "square", color: "rgba(45, 94, 58, 0.10)", payload: { strokeDasharray: "0" } },
               { value: "Mediana (con apalancamiento)", type: "line", color: "var(--ink)", payload: { strokeDasharray: "0" } },
               ...(showBaseline ? [{ value: "Mediana sin apalancamiento (lev=0%)", type: "line", color: "var(--accent)", payload: { strokeDasharray: "6 4" } }] : []),
             ]} />
+          {/* Bandas apiladas: base + 6 anchos */}
           <Area type="monotone" dataKey="base" stackId="band" stroke="none" fill="transparent" legendType="none" name="base" />
+          <Area type="monotone" dataKey="band_1_10" stackId="band" stroke="none"
+            fill="rgba(139, 44, 44, 0.10)" name="band_1_10" />
           <Area type="monotone" dataKey="band_10_25" stackId="band" stroke="none"
             fill="rgba(139, 44, 44, 0.18)" name="band_10_25" />
           <Area type="monotone" dataKey="band_25_50" stackId="band" stroke="none"
@@ -5801,12 +5814,12 @@ function NetWorthAreaChart({ pledgeResult, T, V0Propio }) {
             fill="rgba(184, 146, 58, 0.22)" name="band_50_75" />
           <Area type="monotone" dataKey="band_75_90" stackId="band" stroke="none"
             fill="rgba(45, 94, 58, 0.18)" name="band_75_90" />
-          {/* Baseline lev=0% — dashed line para comparación */}
+          <Area type="monotone" dataKey="band_90_99" stackId="band" stroke="none"
+            fill="rgba(45, 94, 58, 0.10)" name="band_90_99" />
           {showBaseline && (
             <Line type="monotone" dataKey="baseline_p50" stroke="var(--accent)"
               strokeWidth={2} strokeDasharray="6 4" dot={false} name="Mediana sin apalancamiento" />
           )}
-          {/* Mediana con leverage */}
           <Line type="monotone" dataKey="p50" stroke="var(--ink)" strokeWidth={2.8} dot={false} name="Mediana" />
           <ReferenceLine y={V0Propio} stroke="var(--ink-muted)" strokeDasharray="2 3"
             label={{ value: `V₀ = ${fmtUsdCompact(V0Propio)}`, position: "insideTopRight",
@@ -5825,13 +5838,12 @@ function NetWorthAreaChart({ pledgeResult, T, V0Propio }) {
 // ============================================================
 function MarginCallCurvesChart({ marginCallCurves, mcLTV, T }) {
   if (!marginCallCurves || marginCallCurves.length === 0) return null;
-  // Cada año: { year, ltv_0_p50, ltv_0_p90, ltv_1_p50, ltv_1_p90, ... }
   const data = [];
   for (let t = 0; t <= T; t++) {
     const row = { year: t };
     marginCallCurves.forEach((c, i) => {
       row[`ltv_${i}_p50`] = c.yearStats[t]?.ltv_p50 ?? null;
-      row[`ltv_${i}_p90`] = c.yearStats[t]?.ltv_p90 ?? null;
+      row[`ltv_${i}_p99`] = c.yearStats[t]?.ltv_p99 ?? null;
     });
     data.push(row);
   }
@@ -5859,7 +5871,7 @@ function MarginCallCurvesChart({ marginCallCurves, mcLTV, T }) {
                 type: "line", color: colors[i],
                 payload: { strokeDasharray: "0" },
               })),
-              { value: "── sólida: mediana   ┄┄ punteada: stress p90",
+              { value: "── sólida: mediana   ┄┄ punteada: p99 (peor 1%)",
                 type: "line", color: "var(--ink-muted)",
                 payload: { strokeDasharray: "0" } },
             ]} />
@@ -5873,10 +5885,10 @@ function MarginCallCurvesChart({ marginCallCurves, mcLTV, T }) {
               name={`${c.label} · mediana`}
               stroke={colors[i]} strokeWidth={2.4} dot={false} legendType="none" />
           ))}
-          {/* p90 (stress) — líneas punteadas más finas */}
+          {/* p99 (extremo) — líneas punteadas más finas */}
           {marginCallCurves.map((c, i) => (
-            <Line key={`p90_${i}`} type="monotone" dataKey={`ltv_${i}_p90`}
-              name={`${c.label} · stress p90`}
+            <Line key={`p99_${i}`} type="monotone" dataKey={`ltv_${i}_p99`}
+              name={`${c.label} · p99 (peor 1%)`}
               stroke={colors[i]} strokeWidth={1.4} strokeDasharray="4 3"
               dot={false} legendType="none" />
           ))}

@@ -674,29 +674,24 @@ function simulatePaths({ mu, sigma, T, N: nSims = 2000, V0 = 10000 }) {
 }
 
 // ============================================================
-// LEVERAGED SIM v4 — modelo "apalancamiento + retiro con piso y techo"
+// LEVERAGED SIM v5 — modelo "sueldo móvil" (adaptativo al mercado)
 //
 // El usuario aporta V_propio. Se pide préstamo L_0 = leverage × V_propio
 // y se invierte TODO en la cartera: V_invertido_0 = V_propio × (1 + leverage).
 //
-// El retiro anual es el MENOR entre dos cantidades:
-//   - tasa × NW_t    (% del patrimonio neto al cierre de cada año)
-//   - W_desired      (monto en USD fijo, el techo absoluto)
+// El retiro flexa con el mercado:
+//   target_t   = target_0 × (1 + inflación)^(t−1)    ← lo que querías retirar
+//   V_baseline = trayectoria esperada de V (sin shocks)
+//   ratio_t    = V_t / V_baseline_t                  ← cuán bien va el mercado
+//   W_t        = target_t × ratio_t                  ← sueldo móvil
 //
-// Esto significa:
-//   - En años tempranos (NW bajo), domina la tasa → retiros pequeños
-//   - Cuando la cartera crece y tasa × NW > W_desired → se aplica el techo
-//   - Esto preserva la cartera al principio y respeta tu objetivo al final
+// Por matemática del lognormal, E[V_t / V_baseline_t] = 1 (cuando V_baseline
+// usa drift completo μ, no μ−σ²/2). Esto significa que E[W_t] = target_t
+// EXACTAMENTE — el promedio de retiros sobre N paths converge al target.
 //
-// Mecánica anual (paso t → t+1):
-//   1. V_{t+1} = V_t × exp((μ − σ²/2) + σ·Z) + DCA_anual
-//   2. NW_{t+1} = V_{t+1} − L_t                           ← antes del retiro
-//   3. W_{t+1} = min(withdrawalRate × NW, W_desired)      ← el menor
-//   4. L_{t+1} = L_t × (1 + intRate) + W_{t+1}            ← préstamo crece
-//   5. Margin call si L_{t+1} / V_{t+1} > maintenanceLTV
-//
-// SANITY CHECK: con leverage=0, W_desired=0 → la mediana de NW final coincide
-// con el escenario neutro de la pestaña horizonte: V₀ × exp((μ − σ²/2) × T)
+// Cuando el mercado va bien (ratio > 1) → retirás más que el target.
+// Cuando el mercado va mal (ratio < 1) → retirás menos.
+// En promedio sobre los 40 años, el total retirado = sum target_t.
 // ============================================================
 function runLeveragedSim({
   mu, sigma, T, V0Propio = 10000,
@@ -707,14 +702,25 @@ function runLeveragedSim({
   inflationRate = 0.03,
   dcaMonthly = 0,
   N = 3000,
+  marketAdjustment = 0.30,   // ±30% de flexibilidad del target según mercado
 }) {
-  // Estado inicial
   const L0 = leverage * V0Propio;
   const V0 = V0Propio * (1 + leverage);
-  const W_desired_annual_0 = (withdrawalMonthly || 0) * 12;   // año 1
+  const W_target_annual_0 = (withdrawalMonthly || 0) * 12;
   const dcaAnnual = (dcaMonthly || 0) * 12;
   const drift = mu - 0.5 * sigma * sigma;
   const diff = sigma;
+  // Bounds del ajuste de mercado (clamp del ratio V_t/V_baseline_t)
+  const adjLow = 1 - marketAdjustment;
+  const adjHigh = 1 + marketAdjustment;
+
+  // V_baseline = trayectoria esperada E[V_t] usando drift completo μ
+  // Esto hace que E[V_t / V_baseline_t] = 1 para todo t
+  const V_baseline = new Array(T + 1);
+  V_baseline[0] = V0;
+  for (let t = 1; t <= T; t++) {
+    V_baseline[t] = V_baseline[t - 1] * Math.exp(mu) + dcaAnnual;
+  }
 
   // Box–Muller pair-cached
   let _spare = null;
@@ -728,7 +734,6 @@ function runLeveragedSim({
     return mag * Math.cos(2 * Math.PI * v);
   }
 
-  // Per-year arrays
   const V_t = Array.from({ length: T + 1 }, () => new Array(N));
   const L_t = Array.from({ length: T + 1 }, () => new Array(N));
   const NW_t = Array.from({ length: T + 1 }, () => new Array(N));
@@ -746,22 +751,20 @@ function runLeveragedSim({
     let mcAt = -1;
     for (let t = 1; t <= T; t++) {
       const Z = randn();
-      // Cartera: GBM + DCA
       const V_new = V * Math.exp(drift + diff * Z) + dcaAnnual;
-      // NW post-crecimiento, pre-retiro
       const NW_pre = V_new - L;
-      // Retiro: el MENOR entre tasa×NW y techo deseado (que crece con inflación)
-      const W_desired_t = W_desired_annual_0 * Math.pow(1 + inflationRate, t - 1);
+      // MODELO HÍBRIDO: target con inflación, ajustado por ratio del mercado (bounded ±marketAdjustment), cappeado por tasa × NW
+      const target_t = W_target_annual_0 * Math.pow(1 + inflationRate, t - 1);
+      const ratio = V_baseline[t] > 0 ? V_new / V_baseline[t] : 1;
+      const adjustment = Math.max(adjLow, Math.min(adjHigh, ratio));
+      const target_adj = target_t * adjustment;
       const W_rate = withdrawalRate * Math.max(NW_pre, 0);
-      const W = Math.max(0, Math.min(W_rate, W_desired_t));
-      // Préstamo: interés + retiro nuevo
+      const W = Math.max(0, Math.min(W_rate, target_adj));
       const L_new = L * (1 + intRate) + W;
       V = V_new; L = L_new;
       V_t[t][s] = V; L_t[t][s] = L; NW_t[t][s] = V - L;
       W_t[t][s] = W; LTV_t[t][s] = V > 0 ? L / V : Infinity;
-      if (!mcTriggered && L / V > maintenanceLTV) {
-        mcTriggered = true; mcAt = t;
-      }
+      if (!mcTriggered && L / V > maintenanceLTV) { mcTriggered = true; mcAt = t; }
     }
     if (mcTriggered) { mcCount++; mcYears.push(mcAt); }
   }
@@ -771,19 +774,28 @@ function runLeveragedSim({
     return ps.map(p => sorted[Math.floor(sorted.length * p)]);
   }
 
+  function meanOf(arr) {
+    let s = 0;
+    for (let i = 0; i < arr.length; i++) s += arr[i];
+    return arr.length ? s / arr.length : 0;
+  }
+
   const yearStats = [];
   for (let t = 0; t <= T; t++) {
     const [v10, v50, v90] = percentiles(V_t[t]);
     const [l10, l50, l90] = percentiles(L_t[t]);
-    const [w10, w50, w90] = percentiles(W_t[t]);
+    const [w1, w10, w50, w90, w99] = percentiles(W_t[t], [0.01, 0.10, 0.50, 0.90, 0.99]);
     const [ltv10, ltv50, ltv90, ltv99] = percentiles(LTV_t[t], [0.10, 0.50, 0.90, 0.99]);
     const [nw1, nw10, nw25, nw50, nw75, nw90, nw99] = percentiles(NW_t[t], [0.01, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99]);
+    const nw_mean = meanOf(NW_t[t]);
+    const w_mean = meanOf(W_t[t]);
     yearStats.push({
       year: t,
       v_p10: v10, v_p50: v50, v_p90: v90,
       l_p10: l10, l_p50: l50, l_p90: l90,
       nw_p1: nw1, nw_p10: nw10, nw_p25: nw25, nw_p50: nw50, nw_p75: nw75, nw_p90: nw90, nw_p99: nw99,
-      w_p10: w10, w_p50: w50, w_p90: w90,
+      nw_mean,
+      w_p1: w1, w_p10: w10, w_p50: w50, w_p90: w90, w_p99: w99, w_mean,
       ltv_p10: ltv10 * 100, ltv_p50: ltv50 * 100, ltv_p90: ltv90 * 100, ltv_p99: ltv99 * 100,
     });
   }
@@ -792,25 +804,51 @@ function runLeveragedSim({
   const [v10F, v50F, v90F] = percentiles(V_t[T]);
   const [l10F, l50F, l90F] = percentiles(L_t[T]);
 
-  const avgW = new Array(N);
+  // Estadísticas del sueldo por path: promedio, peor año, mejor año
+  // útiles para mostrar la volatilidad del salario móvil
+  const avgW_path = new Float64Array(N);
+  const minW_path = new Float64Array(N);
+  const maxW_path = new Float64Array(N);
   for (let s = 0; s < N; s++) {
-    let sum = 0;
-    for (let t = 1; t <= T; t++) sum += W_t[t][s];
-    avgW[s] = sum / T;
+    let sum = 0, mn = Infinity, mx = -Infinity;
+    for (let t = 1; t <= T; t++) {
+      const w = W_t[t][s];
+      sum += w;
+      if (w < mn) mn = w;
+      if (w > mx) mx = w;
+    }
+    avgW_path[s] = sum / T;
+    minW_path[s] = mn;
+    maxW_path[s] = mx;
   }
-  const [w10A, w50A, w90A] = percentiles(avgW);
+  const [avgW10, avgW50, avgW90] = percentiles(Array.from(avgW_path));
+  const [minW10, minW50, minW90] = percentiles(Array.from(minW_path));
+  const [maxW10, maxW50, maxW90] = percentiles(Array.from(maxW_path));
+  // Mean across paths (vs median p50). Para el lognormal, mean > median.
+  // El usuario quiere "promedio" (mean) = target, así que reportamos mean.
+  let avgW_mean = 0, minW_mean = 0, maxW_mean = 0;
+  for (let s = 0; s < N; s++) {
+    avgW_mean += avgW_path[s];
+    minW_mean += minW_path[s];
+    maxW_mean += maxW_path[s];
+  }
+  avgW_mean /= N; minW_mean /= N; maxW_mean /= N;
 
   return {
-    V0Propio, L0, V0,
-    T,
-    W_desired_annual_0,
+    V0Propio, L0, V0, T,
+    W_target_annual_0,
     inflationRate,
     mcProb: mcCount / N,
     avgMCTime: mcYears.length ? mcYears.reduce((a, b) => a + b, 0) / mcYears.length : null,
     netPatrimony_p10: nw10F, netPatrimony_p50: nw50F, netPatrimony_p90: nw90F,
     valueFinal_p10: v10F, valueFinal_p50: v50F, valueFinal_p90: v90F,
     loanFinal_p10: l10F, loanFinal_p50: l50F, loanFinal_p90: l90F,
-    avgWithdrawal_p10: w10A, avgWithdrawal_p50: w50A, avgWithdrawal_p90: w90A,
+    avgWithdrawal_p10: avgW10, avgWithdrawal_p50: avgW50, avgWithdrawal_p90: avgW90,
+    avgWithdrawal_mean: avgW_mean,
+    minWithdrawal_p10: minW10, minWithdrawal_p50: minW50, minWithdrawal_p90: minW90,
+    minWithdrawal_mean: minW_mean,
+    maxWithdrawal_p10: maxW10, maxWithdrawal_p50: maxW50, maxWithdrawal_p90: maxW90,
+    maxWithdrawal_mean: maxW_mean,
     yearStats,
   };
 }
@@ -833,6 +871,7 @@ function runLeveragedConfidenceTable({
   inflationRate = 0.03,
   dcaMonthly = 0,
   N = 1500,
+  marketAdjustment = 0.30,
 }) {
   const annualPcts = [];
   for (let p = 0;     p <= 0.005 - 1e-9; p += 0.0005) annualPcts.push(Math.round(p * 100000) / 100000);
@@ -843,8 +882,16 @@ function runLeveragedConfidenceTable({
   const dcaAnnual = (dcaMonthly || 0) * 12;
   const drift = mu - 0.5 * sigma * sigma;
   const diff = sigma;
+  const adjLow = 1 - marketAdjustment;
+  const adjHigh = 1 + marketAdjustment;
 
-  // Box–Muller con cache
+  // V_baseline para retiro adaptativo (mismo concepto que en runLeveragedSim)
+  const V_baseline = new Array(T + 1);
+  V_baseline[0] = V0;
+  for (let t = 1; t <= T; t++) {
+    V_baseline[t] = V_baseline[t - 1] * Math.exp(mu) + dcaAnnual;
+  }
+
   let _spare = null;
   function randn() {
     if (_spare !== null) { const r = _spare; _spare = null; return r; }
@@ -856,8 +903,7 @@ function runLeveragedConfidenceTable({
     return mag * Math.cos(2 * Math.PI * v);
   }
 
-  // Pre-generar V paths una sola vez (independientes del nivel de retiro)
-  // Float64Array es más rápido que Array regular para acceso secuencial
+  // Pre-generar V paths una sola vez
   const Vpaths = new Float64Array(N * (T + 1));
   for (let s = 0; s < N; s++) {
     Vpaths[s * (T + 1)] = V0;
@@ -870,8 +916,8 @@ function runLeveragedConfidenceTable({
 
   const rows = [];
   for (const annualPct of annualPcts) {
-    const W_yearDesired = V0Propio * annualPct;
-    const W_monthDesired = W_yearDesired / 12;
+    const W_yearTarget_0 = V0Propio * annualPct;
+    const W_monthTarget = W_yearTarget_0 / 12;
 
     let mcCount = 0;
     const netFinal = new Float64Array(N);
@@ -885,9 +931,13 @@ function runLeveragedConfidenceTable({
       for (let t = 1; t <= T; t++) {
         const V = Vpaths[sOffset + t];
         const NW_pre = V - L;
-        const W_rate = withdrawalRate * (NW_pre > 0 ? NW_pre : 0);
-        const W_desired_t = W_yearDesired * Math.pow(1 + inflationRate, t - 1);
-        const W = W_rate < W_desired_t ? W_rate : W_desired_t;
+        // Modelo híbrido: target ajustado por mercado (bounded), capped por tasa × NW
+        const target_t = W_yearTarget_0 * Math.pow(1 + inflationRate, t - 1);
+        const ratio = V_baseline[t] > 0 ? V / V_baseline[t] : 1;
+        const adjustment = Math.max(adjLow, Math.min(adjHigh, ratio));
+        const target_adj = target_t * adjustment;
+        const W_rate = withdrawalRate * Math.max(NW_pre, 0);
+        const W = Math.max(0, Math.min(W_rate, target_adj));
         wSum += W;
         L = L * (1 + intRate) + W;
         if (!mcTriggered && L / V > maintenanceLTV) mcTriggered = true;
@@ -897,15 +947,19 @@ function runLeveragedConfidenceTable({
       avgW[s] = wSum / T;
     }
 
-    // Percentiles
     const netSorted = Array.from(netFinal).sort((a, b) => a - b);
     const wSorted = Array.from(avgW).sort((a, b) => a - b);
+    // Mean cross-paths (no median): para modelo adaptativo, E[avg(W)] = target_avg
+    let wMean = 0;
+    for (let i = 0; i < N; i++) wMean += avgW[i];
+    wMean /= N;
     const mcProb = mcCount / N;
     rows.push({
       annualPct,
-      W_monthDesired,
-      W_yearDesired,
+      W_monthDesired: W_monthTarget,
+      W_yearDesired: W_yearTarget_0,
       W_yearActual_p50: wSorted[Math.floor(N * 0.5)],
+      W_yearActual_mean: wMean,
       mcProb,
       confidence: 1 - mcProb,
       passes99: mcProb <= 0.01,
@@ -933,29 +987,30 @@ function runLeveragedConfidenceTable({
 }
 
 // ============================================================
-// MARGIN CALL CURVES v6 — 5 niveles FIJOS de TASA DE RETIRO (1%-5%).
-// El TECHO (monto deseado USD) se mantiene FIJO en lo que pide el usuario.
-// Cada año el retiro real es min(tasa × NW, techo) — gana el menor.
-// En años tempranos típicamente domina la tasa; en años tardíos el techo.
+// MARGIN CALL CURVES v8 — 5 niveles FIJOS de TARGET USD (1%-5% V₀ anual).
+// Cada curva varía el target del usuario manteniendo todo lo demás fijo.
+// Modelo: W = min(tasa × NW, target_t) por escenario y año.
 // ============================================================
 function runMarginCallCurves({
   mu, sigma, T, V0Propio = 10000,
   leverage = 0.30, intRate = 0.045,
   maintenanceLTV = 0.70,
-  withdrawalMonthly = 0,
+  withdrawalRate = 0.04,
   inflationRate = 0.03,
   dcaMonthly = 0,
   N = 2000,
+  marketAdjustment = 0.30,
 }) {
-  // GRID FIJO de TASAS — el techo (deseado del usuario) no cambia
-  const rateGrid = [0.01, 0.02, 0.03, 0.04, 0.05];
+  // GRID FIJO de TARGETS USD anuales: 1%, 2%, 3%, 4%, 5% V₀
+  const annualPcts = [0.01, 0.02, 0.03, 0.04, 0.05];
+  const monthlyAmounts = annualPcts.map(p => V0Propio * p / 12);
 
-  return rateGrid.map((rate, idx) => {
+  return monthlyAmounts.map((monthly, idx) => {
     const sim = runLeveragedSim({
       mu, sigma, T, V0Propio, leverage, intRate, maintenanceLTV,
-      withdrawalMonthly,                // techo año 1 (crece con inflación)
-      withdrawalRate: rate,             // tasa variable
-      inflationRate,
+      withdrawalMonthly: monthly,        // target USD para esta curva
+      withdrawalRate,                    // tasa floor (mismo para las 5)
+      inflationRate, marketAdjustment,
       dcaMonthly, N,
     });
     const mcLTVPct = maintenanceLTV * 100;
@@ -966,10 +1021,15 @@ function runMarginCallCurves({
       if (crossYearP99 === null && sim.yearStats[t].ltv_p99 >= mcLTVPct) crossYearP99 = t;
     }
     return {
-      rate,
-      withdrawalMonthly,                                       // techo (mismo en los 5)
-      avgMonthly_p50: (sim.avgWithdrawal_p50 || 0) / 12,       // retiro mediana real realizado
-      label: `tasa ${(rate * 100).toFixed(0)}%`,
+      monthly,
+      annualPct: annualPcts[idx],
+      label: fmtPctStatic(annualPcts[idx], 0) + " V₀",
+      avgMonthly_mean: (sim.avgWithdrawal_mean || 0) / 12,
+      minMonthly_mean: (sim.minWithdrawal_mean || 0) / 12,
+      maxMonthly_mean: (sim.maxWithdrawal_mean || 0) / 12,
+      avgMonthly_p50: (sim.avgWithdrawal_p50 || 0) / 12,
+      minMonthly_p50: (sim.minWithdrawal_p50 || 0) / 12,
+      maxMonthly_p50: (sim.maxWithdrawal_p50 || 0) / 12,
       mcProb: sim.mcProb,
       crossYearMedian: crossYearP50,
       crossYearStress: crossYearP99,
@@ -2609,6 +2669,7 @@ export default function Calculadora() {
         withdrawalMonthly: withdrawalMonthly_eff,
         withdrawalRate, dcaMonthly: dcaMonthly_eff,
         inflationRate: 0.03,            // fijo 3% anual — techo USD crece para preservar poder adquisitivo
+        marketAdjustment: 0.30,         // ±30% ajuste del target según mercado (lo mejor de ambos mundos)
       };
       const sim = runLeveragedSim({ ...params, N: 10000 });
       const simNoLev = runLeveragedSim({ ...params, leverage: 0, N: 10000 });
@@ -2647,8 +2708,9 @@ export default function Calculadora() {
         const mc = runMarginCallCurves({
           mu: p.mu, sigma: p.sigma, T: p.T, V0Propio: p.V0Propio,
           leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
-          withdrawalMonthly: p.withdrawalMonthly, inflationRate: p.inflationRate,
+          withdrawalRate: p.withdrawalRate, inflationRate: p.inflationRate,
           dcaMonthly: p.dcaMonthly, N: 2000,
+          marketAdjustment: p.marketAdjustment,
         });
         setMarginCallCurves(mc);
       } catch (e) { console.error("marginCallCurves error:", e); }
@@ -2661,6 +2723,7 @@ export default function Calculadora() {
           leverage: p.leverage, intRate: p.intRate, maintenanceLTV: p.maintenanceLTV,
           withdrawalRate: p.withdrawalRate, inflationRate: p.inflationRate,
           dcaMonthly: p.dcaMonthly, N: 1500,
+          marketAdjustment: p.marketAdjustment,
         });
         setConfidenceTable(ct);
       } catch (e) { console.error("confidenceTable error:", e); }
@@ -3966,9 +4029,9 @@ export default function Calculadora() {
           <div style={styles.pignHero}>
             <h2 style={styles.pignHeroTitle}>Pignoración</h2>
             <p style={styles.pignHeroSub}>
-              Apalancá tu cartera y vivi del crédito. Cada año retirás el <strong>menor</strong> entre una tasa fija
-              del patrimonio neto y un monto objetivo en USD. Al inicio domina la tasa (NW chico → retiro chico);
-              cuando la cartera crece lo suficiente, se activa el techo del monto deseado.
+              Apalancá tu cartera y vivi del crédito. <strong>Modelo híbrido</strong>: el target USD crece 3%/año con inflación
+              y se ajusta ±30% según cómo va el mercado (más en booms, menos en caídas), todo limitado por <code>tasa × NW</code>
+              como floor de seguridad para preservar capital.
             </p>
           </div>
 
@@ -3982,18 +4045,24 @@ export default function Calculadora() {
                   type="text"
                   inputMode="numeric"
                   value={withdrawalMonthly}
-                  onChange={(e) => setWithdrawalMonthly(e.target.value.replace(/[^0-9.,]/g, ""))}
+                  onChange={(e) => {
+                    const cleaned = e.target.value.replace(/[^0-9.,]/g, "");
+                    setWithdrawalMonthly(cleaned);
+                    // Sync tasa equivalente: monthly × 12 / V₀
+                    const monthly = parseFloat(cleaned.replace(",", ".")) || 0;
+                    if (V0_eff > 0) setWithdrawalRate((monthly * 12) / V0_eff);
+                  }}
                   style={styles.withdrawalHeroInput}
                   placeholder="4000"
                 />
                 <span style={styles.withdrawalHeroSuffix}>/mes</span>
               </div>
               <div style={styles.withdrawalHeroDesc}>
-                Cada año retirás el <strong>menor</strong> entre <code>{fmtPct(withdrawalRate, 1)} × NW</code> y el techo USD,
-                que crece <strong>3%/año con inflación</strong> para preservar poder adquisitivo.
-                Año 1: <strong>{fmtUsd(withdrawalMonthly_eff)}/mes</strong>.
-                Año {horizon}: <strong>{fmtUsd(withdrawalMonthly_eff * Math.pow(1.03, horizon - 1))}/mes</strong> (techo nominal).
-                Al inicio domina la tasa; cuando la cartera crece, domina el techo.
+                Cada año: <code>W = min({fmtPct(withdrawalRate, 2)} × NW, target_t × ajuste)</code>.
+                El target crece 3%/año con inflación (año 1 = <strong>{fmtUsd(withdrawalMonthly_eff)}/mes</strong>,
+                año {horizon} = <strong>{fmtUsd(withdrawalMonthly_eff * Math.pow(1.03, horizon - 1))}/mes</strong>).
+                El ajuste bounded (±30%) hace que retires un poco más en booms y un poco menos en caídas,
+                con la tasa × NW como floor de seguridad.
               </div>
             </div>
             <div style={styles.withdrawalHeroRight}>
@@ -4001,22 +4070,22 @@ export default function Calculadora() {
               <div style={styles.withdrawalHeroRatioValue}>
                 {withdrawalMonthly_eff > 0 && withdrawalRate > 0 && V0_eff > 0
                   ? (() => {
-                      // Cruce: rate × NW(t) = techo(t) considerando inflación
-                      // NW(t) ≈ V₀ × exp(driftMedian × t), techo(t) = techo₀ × (1+infl)^t
-                      const techo0 = withdrawalMonthly_eff * 12;
+                      // Cruce: tasa × NW(t) = target(t)
+                      // NW(t) ≈ V₀ × exp(driftMedian × t), target(t) = target₀ × (1+infl)^t
+                      const target0 = withdrawalMonthly_eff * 12;
                       const muEff = mu + leverage * (mu - intRate);
                       const driftMedian = muEff - 0.5 * sigma * sigma;
                       const effDrift = driftMedian - Math.log(1.03);
-                      const target = techo0 / (withdrawalRate * V0_eff);
-                      const yearCross = target > 1 && effDrift > 0
-                        ? Math.log(target) / effDrift
+                      const ratio = target0 / (withdrawalRate * V0_eff);
+                      const yearCross = ratio > 1 && effDrift > 0
+                        ? Math.log(ratio) / effDrift
                         : 0;
                       return yearCross > 0 && yearCross < 100 ? `año ${yearCross.toFixed(1)}` : "—";
                     })()
                   : "—"}
               </div>
               <div style={styles.withdrawalHeroRatioDesc}>
-                cuando tasa × NW = techo (mediana), considerando inflación 3%
+                cuando tasa × NW(t) = target(t) en mediana, considerando inflación 3%
               </div>
             </div>
           </div>
@@ -4033,9 +4102,15 @@ export default function Calculadora() {
             <SliderControl label="Umbral margin call" value={mcLTV}
               min={0.50} max={0.85} step={0.05} onChange={setMcLTV}
               fmt={v => fmtPct(v, 0)} hint="L/V máximo del banco" />
-            <SliderControl label="Tasa de retiro" value={withdrawalRate}
-              min={0} max={0.10} step={0.0025} onChange={setWithdrawalRate}
-              fmt={v => fmtPct(v, 2)} hint="% NW · piso de seguridad" />
+            <SliderControl label="Tasa de retiro (target/V₀)" value={withdrawalRate}
+              min={0.005} max={0.08} step={0.0025}
+              onChange={(rate) => {
+                setWithdrawalRate(rate);
+                // Sync USD: rate × V₀ / 12 = mes (año 1)
+                if (V0_eff > 0) setWithdrawalMonthly(String(Math.round((rate * V0_eff) / 12)));
+              }}
+              fmt={v => fmtPct(v, 2)}
+              hint={V0_eff > 0 ? `≡ ${fmtUsd((withdrawalRate * V0_eff) / 12)}/mes año 1` : "anual sobre V₀"} />
             <div style={styles.horizonLink}>
               <div style={styles.sliderLabel}>HORIZONTE</div>
               <div style={styles.horizonLinkValue}>{horizon} años</div>
@@ -4072,6 +4147,29 @@ export default function Calculadora() {
             </div>
           ) : (
             <>
+              {/* ALERTA: σ muy baja → escenarios convergen */}
+              {pledgeResult._params.sigma < 0.02 && (
+                <div style={styles.sigmaWarning}>
+                  <div style={styles.sigmaWarningTitle}>⚠ Volatilidad muy baja (σ = {fmtPct(pledgeResult._params.sigma, 2)})</div>
+                  <div style={styles.sigmaWarningBody}>
+                    Tu portfolio tiene casi nula volatilidad — los 5 escenarios convergen al mismo valor
+                    porque sin σ no hay incertidumbre que dispersar. La tabla y el gráfico se ven uniformes por eso.
+                    {" "}Verificá en la <strong>pestaña I (Cartera)</strong> que tengas activos volátiles (acciones, etc.)
+                    seleccionados. Si solo tenés cash/savings, no vas a ver dispersión entre escenarios.
+                  </div>
+                </div>
+              )}
+              {/* ALERTA: μ ≤ tasa préstamo → cartera no crece más que el costo de financiamiento */}
+              {pledgeResult._params.mu <= pledgeResult._params.intRate + 0.005 && (
+                <div style={styles.sigmaWarning}>
+                  <div style={styles.sigmaWarningTitle}>⚠ Retorno bajo (μ = {fmtPct(pledgeResult._params.mu, 2)} ≈ tasa préstamo {fmtPct(pledgeResult._params.intRate, 2)})</div>
+                  <div style={styles.sigmaWarningBody}>
+                    El retorno esperado de tu cartera es similar o menor a la tasa del préstamo. El apalancamiento
+                    en estas condiciones <strong>destruye valor</strong> en lugar de crearlo: pagás más interés del
+                    que generás. La cartera se drena progresivamente.
+                  </div>
+                </div>
+              )}
               {/* HEADLINE — 5 metrics inline incl. beneficio del apalancamiento */}
               <div style={styles.pignHeadlineHero}>
                 <div style={styles.pignHeadlineItem}>
@@ -4145,30 +4243,45 @@ export default function Calculadora() {
                 <div style={styles.pignSectionHeader}>
                   <h3 style={styles.pignSectionTitle}>Patrimonio neto a lo largo del tiempo · por escenario</h3>
                   <p style={styles.pignSectionDesc}>
-                    Bandas concéntricas muestran 7 escenarios — desde la <strong>cola extrema p1 (peor 1%)</strong>
-                    hasta la <strong>cola extrema p99 (mejor 1%)</strong>, capturando 98% de los caminos simulados.
-                    La banda más clara abajo es el <strong>peor escenario al 99% de confianza</strong>: tu NW al año T
-                    no debería ser inferior al valor de esa banda con probabilidad del 99%.
-                    Con leverage 0% y retiro $0, la mediana debe coincidir con el escenario neutro de la pestaña III.
+                    Banda <strong>mínimo–máximo</strong> entre los escenarios simulados (p1 a p99 — 98% de los caminos).
+                    La línea negra es la <strong>media cross-escenarios</strong> (promedio del NW en cada año a través de todos los caminos).
+                    La línea punteada amarilla es la mediana sin apalancamiento (lev=0%) como referencia.
+                    El "mínimo" es tu NW en el 1% peor de escenarios; el "máximo" en el 1% mejor.
                   </p>
                 </div>
                 <NetWorthAreaChart pledgeResult={pledgeResult} T={pledgeResult._params.T} V0Propio={V0_eff} />
               </div>
 
-              {/* GRÁFICO 2 — ¿CUÁNDO TOCO EL UMBRAL? */}
+              {/* GRÁFICO 2 — RETIROS AÑO A AÑO POR ESCENARIOS (barras + banda) */}
+              <div style={styles.pignChartSection}>
+                <div style={styles.pignSectionHeader}>
+                  <h3 style={styles.pignSectionTitle}>Sueldo móvil año a año · por escenario</h3>
+                  <p style={styles.pignSectionDesc}>
+                    Cada año tiene <strong>5 barras agrupadas</strong>, una por escenario (muy pesimista p1 → muy optimista p99).
+                    Modelo híbrido: <code>W = min(tasa × NW, target_t × ajuste(±30%))</code>. El ajuste mueve el target
+                    según la performance del mercado vs lo esperado. Línea negra punteada = target nominal sin ajuste.
+                  </p>
+                </div>
+                <WithdrawalsBarChart pledgeResult={pledgeResult} T={pledgeResult._params.T} inflationRate={0.03} />
+                <WithdrawalsScenariosTable
+                  pledgeResult={pledgeResult}
+                  T={pledgeResult._params.T}
+                  withdrawalMonthly_eff={withdrawalMonthly_eff}
+                  inflationRate={0.03}
+                />
+              </div>
+
+              {/* GRÁFICO 3 — ¿CUÁNDO TOCO EL UMBRAL? */}
               <div style={styles.pignChartSection}>
                 <div style={styles.pignSectionHeader}>
                   <h3 style={styles.pignSectionTitle}>¿Cuándo toco el margin call?</h3>
                   <p style={styles.pignSectionDesc}>
-                    Trayectoria de la LTV para 5 niveles fijos de <strong>tasa de retiro</strong>:
-                    {" "}<strong>1%, 2%, 3%, 4%, 5% del NW</strong>.
-                    Tu monto deseado (techo USD) parte en <strong>{fmtUsd(withdrawalMonthly_eff)}/mes año 1</strong> y crece 3%/año con inflación{" "}
-                    (llega a <strong>{fmtUsd(withdrawalMonthly_eff * Math.pow(1.03, (pledgeResult?._params?.T || horizon) - 1))}/mes al año {pledgeResult?._params?.T || horizon}</strong>).
-                    Cada año el retiro real es <code>min(tasa × NW, techo_t)</code>.
-                    En años tempranos típicamente domina la tasa; cuando la cartera crece más rápido que la inflación, domina el techo.
-                    Cada nivel tiene <strong>dos líneas del mismo color</strong>:
-                    <strong> sólida = mediana</strong> y <strong>punteada = p99</strong> (peor 1%).
-                    <strong> Si la punteada NO cruza, estás seguro al 99%</strong>.
+                    Trayectoria de la LTV para 5 niveles fijos de <strong>target USD</strong>: <strong>1%, 2%, 3%, 4%, 5% de V₀ anual</strong>{" "}
+                    (independientes del input). Cada año el retiro es <strong>móvil</strong>:
+                    <code> W_t = target_t × (V_t / V_baseline_t)</code> — fluctúa con el mercado.
+                    El target crece 3%/año con inflación. Cada nivel tiene <strong>dos líneas</strong>:
+                    <strong> sólida = mediana</strong>, <strong>punteada = p99</strong> (peor 1%).
+                    <strong> Si la punteada NO cruza el umbral, estás seguro al 99%</strong>.
                   </p>
                 </div>
                 {!marginCallCurves ? (
@@ -4182,16 +4295,26 @@ export default function Calculadora() {
                       const colors = ["#2d7a40", "#7aa83a", "#b89535", "#c97a2e", "#a83a35"];
                       const crossesMedian = c.crossYearMedian !== null;
                       const crossesStress = c.crossYearStress !== null;
-                      const isCurrent = Math.abs(c.rate - withdrawalRate) < 1e-6;
+                      const isCurrent = Math.abs(c.monthly - withdrawalMonthly_eff) < 1;
                       return (
                         <div key={idx} style={{
                           ...styles.mcCurveCard,
                           borderColor: colors[idx],
                           ...(isCurrent ? { background: "var(--surface-2)", boxShadow: "inset 0 0 0 2px var(--ink)" } : {}),
                         }}
-                        onClick={() => { setWithdrawalRate(c.rate); setTimeout(() => runPledge(), 60); }}>
+                        onClick={() => { setWithdrawalMonthly(String(Math.round(c.monthly))); setTimeout(() => runPledge(), 60); }}>
                           <div style={{ ...styles.mcCurveLabel, color: colors[idx] }}>{c.label}</div>
-                          <div style={styles.mcCurveSubLabel}>realizado p50: {fmtUsd(c.avgMonthly_p50)}/mes</div>
+                          <div style={styles.mcCurveSubLabel}>target: {fmtUsd(c.monthly)}/mes</div>
+                          <div style={styles.mcCurveMetric}>
+                            <span style={styles.mcCurveMetricLabel}>realizado promedio:</span>
+                            <span style={{ fontWeight: 600 }}>{fmtUsd(c.avgMonthly_mean)}/mes</span>
+                          </div>
+                          <div style={styles.mcCurveMetric}>
+                            <span style={styles.mcCurveMetricLabel}>min / max año:</span>
+                            <span style={{ fontWeight: 600, fontSize: 10.5 }}>
+                              {fmtUsd(c.minMonthly_mean)} / {fmtUsd(c.maxMonthly_mean)}
+                            </span>
+                          </div>
                           <div style={styles.mcCurveMetric}>
                             <span style={styles.mcCurveMetricLabel}>P(MC):</span>
                             <span style={{ fontWeight: 600, color: c.mcProb < 0.05 ? "var(--positive)" : c.mcProb < 0.10 ? "var(--gold)" : "var(--negative)" }}>
@@ -4203,10 +4326,6 @@ export default function Calculadora() {
                             <span style={{ fontWeight: 600, fontSize: 10.5 }}>
                               {c.ltv_p50_final.toFixed(1)}% / {c.ltv_p99_final.toFixed(1)}%
                             </span>
-                          </div>
-                          <div style={styles.mcCurveMetric}>
-                            <span style={styles.mcCurveMetricLabel}>NW final p50:</span>
-                            <span style={{ fontWeight: 600 }}>{fmtUsdCompact(c.netFinal_p50)}</span>
                           </div>
                           <div style={{
                             ...styles.mcCurveStatus,
@@ -4232,8 +4351,8 @@ export default function Calculadora() {
                 </summary>
                 <div style={{ marginTop: 14 }}>
                   <p style={{ fontSize: 12, color: "var(--ink-muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
-                    Click en cualquier fila para aplicar ese monto. La columna <strong>"Realizado p50"</strong> muestra el retiro promedio mediano
-                    efectivamente realizado (puede ser menor al deseado en años tempranos cuando domina la tasa {fmtPct(withdrawalRate, 1)} × NW).
+                    Click en cualquier fila para aplicar ese monto. La columna <strong>"Realizado promedio"</strong> es el mean cross-paths
+                    del sueldo anual realizado — converge al target cuando hay suficientes paths (modelo adaptativo).
                   </p>
                   {confidenceTable && (
                     <ConfidenceSensitivityTableV2
@@ -4261,13 +4380,22 @@ export default function Calculadora() {
                 <div style={styles.pignMechTitle}>Mecánica anual del modelo</div>
                 <ol style={styles.pignMechList}>
                   <li>La cartera <strong>V</strong> crece por GBM: <code>V × exp((μ − σ²/2) + σZ)</code> + DCA</li>
-                  <li>Patrimonio neto pre-retiro: <code>NW = V − L</code></li>
-                  <li>Techo del retiro año t: <code>techo_t = {fmtUsd(withdrawalMonthly_eff * 12)} × (1 + 3%)^(t−1)</code> (crece con inflación)</li>
-                  <li>Retiro del año: <code>W_t = min({fmtPct(withdrawalRate, 1)} × NW, techo_t)</code> — el <strong>menor</strong></li>
+                  <li>Línea base esperada: <code>V_baseline_t = V₀ × exp(μ × t)</code> + DCA (sin ruido)</li>
+                  <li>Target del año t (crece con inflación): <code>target_t = {fmtUsd(withdrawalMonthly_eff * 12)} × (1 + 3%)^(t−1)</code></li>
+                  <li>Ratio de mercado: <code>r_t = V_t / V_baseline_t</code></li>
+                  <li>Ajuste bounded (±30%): <code>adj = clamp(r_t, 0.70, 1.30)</code></li>
+                  <li>Target ajustado: <code>target_adj = target_t × adj</code></li>
+                  <li><strong>Retiro</strong>: <code>W_t = min({fmtPct(withdrawalRate, 2)} × NW_pre, target_adj)</code></li>
                   <li>Préstamo: <code>L_t = L_(t−1) × (1 + {fmtPct(intRate, 2)}) + W_t</code></li>
                   <li>Margin call si <code>L_t / V_t &gt; {fmtPct(mcLTV, 0)}</code></li>
-                  <li>Patrimonio neto al cierre: <code>NW_t = V_t − L_t</code></li>
                 </ol>
+                <div style={{ ...styles.pignMechTitle, marginTop: 14 }}>Lectura del modelo híbrido</div>
+                <div style={{ fontSize: 12, color: "var(--ink-muted)", lineHeight: 1.55 }}>
+                  Combina <strong>floor + ceiling + adaptación al mercado</strong>: en mercados bajos retirás
+                  hasta 30% menos que el target (target × 0.7), en mercados altos hasta 30% más (target × 1.3),
+                  pero siempre limitado por <code>tasa × NW</code> como red de seguridad. Esto evita extremos:
+                  no retirás 5× el target en booms ni te quedás retirando lo mismo cuando la cartera se cae.
+                </div>
                 <div style={{ ...styles.pignMechTitle, marginTop: 14 }}>Sanity check</div>
                 <div style={{ fontSize: 12, color: "var(--ink-muted)", lineHeight: 1.55 }}>
                   Con <code>leverage = 0%</code> y <code>retiro = $0</code>, el patrimonio neto mediano al año {pledgeResult._params.T} debe
@@ -5648,7 +5776,7 @@ function ConfidenceSensitivityTableV2({ confidenceTable, V0Propio, currentAnnual
             <th style={{ ...styles.sensTh, textAlign: "left" }}>Monto deseado<br/>(% anual / V₀)</th>
             <th style={styles.sensTh}>USD/mes<br/>(techo)</th>
             <th style={styles.sensTh}>USD/año<br/>(techo)</th>
-            <th style={styles.sensTh}>Realizado p50<br/>(promedio/año)</th>
+            <th style={styles.sensTh}>Realizado mean<br/>(promedio/año)</th>
             <th style={styles.sensTh}>Confianza</th>
             <th style={styles.sensTh}>99%</th>
             <th style={styles.sensTh}>95%</th>
@@ -5682,7 +5810,7 @@ function ConfidenceSensitivityTableV2({ confidenceTable, V0Propio, currentAnnual
                 </td>
                 <td style={styles.sensTd}>{fmtUsd(r.W_monthDesired)}</td>
                 <td style={styles.sensTd}>{fmtUsd(r.W_yearDesired)}</td>
-                <td style={{ ...styles.sensTd, color: "var(--ink-muted)" }}>{fmtUsd(r.W_yearActual_p50)}</td>
+                <td style={{ ...styles.sensTd, color: "var(--ink-muted)" }}>{fmtUsd(r.W_yearActual_mean ?? r.W_yearActual_p50)}</td>
                 <td style={{ ...styles.sensTd, fontWeight: 600 }}>{fmtPct(r.confidence, 1)}</td>
                 <td style={{ ...styles.sensTd, color: r.passes99 ? "var(--positive)" : "var(--ink-muted)" }}>{r.passes99 ? "✓" : "—"}</td>
                 <td style={{ ...styles.sensTd, color: r.passes95 ? "var(--positive)" : "var(--ink-muted)" }}>{r.passes95 ? "✓" : "—"}</td>
@@ -5766,32 +5894,178 @@ function YearByYearTable({ pledgeResult, T, V0Propio }) {
 // Bandas concéntricas tipo "fan chart". Mediana en línea oscura.
 // Más simple y legible que Bollinger para distribuciones lognormales.
 // ============================================================
+// ============================================================
+// WITHDRAWALS BAR CHART · retiros año a año, 5 escenarios agrupados
+// Cada año tiene 5 barras: muy pesimista (p1), pesimista (p10),
+// neutral (p50), optimista (p90), muy optimista (p99). Línea negra
+// punteada = target nominal con inflación 3% (referencia).
+// ============================================================
+function WithdrawalsBarChart({ pledgeResult, T, inflationRate = 0.03 }) {
+  if (!pledgeResult?.yearStats) return null;
+  const W_target_annual_0 = pledgeResult.W_target_annual_0 || 0;
+  const data = pledgeResult.yearStats.slice(1, T + 1).map((s) => {
+    const target_t = W_target_annual_0 * Math.pow(1 + inflationRate, s.year - 1);
+    return {
+      year: s.year,
+      p1: s.w_p1,
+      p10: s.w_p10,
+      p50: s.w_p50,
+      p90: s.w_p90,
+      p99: s.w_p99,
+      target: target_t,
+    };
+  });
+  // Paleta consistente con margin call curves (de rojo a verde)
+  const scenarioColors = {
+    p1:  "#8b2c2c",   // muy pesimista
+    p10: "#c97a2e",   // pesimista
+    p50: "#b8923a",   // neutral
+    p90: "#7aa83a",   // optimista
+    p99: "#2d7a40",   // muy optimista
+  };
+  return (
+    <div style={styles.chartWrap}>
+      <ResponsiveContainer width="100%" height={420}>
+        <ComposedChart data={data} margin={{ top: 12, right: 24, left: 70, bottom: 30 }} barGap={1} barCategoryGap="12%">
+          <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" />
+          <XAxis dataKey="year" stroke="var(--ink-muted)"
+            style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}
+            label={{ value: "Año", position: "insideBottom", offset: -8, fill: "var(--ink-muted)", fontSize: 11 }} />
+          <YAxis stroke="var(--ink-muted)"
+            style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}
+            tickFormatter={(v) => fmtUsdCompact(v)}
+            label={{ value: "Retiro anual (USD)", angle: -90, position: "insideLeft", offset: -55, fill: "var(--ink-muted)", fontSize: 11 }} />
+          <Tooltip
+            formatter={(value, name) => [fmtUsd(value), name]}
+            labelFormatter={(y) => `Año ${y}`}
+            contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }} />
+          <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, paddingTop: 8 }} />
+          <Bar dataKey="p1"  fill={scenarioColors.p1}  name="Muy pesimista (p1)" />
+          <Bar dataKey="p10" fill={scenarioColors.p10} name="Pesimista (p10)" />
+          <Bar dataKey="p50" fill={scenarioColors.p50} name="Neutral (p50)" />
+          <Bar dataKey="p90" fill={scenarioColors.p90} name="Optimista (p90)" />
+          <Bar dataKey="p99" fill={scenarioColors.p99} name="Muy optimista (p99)" />
+          <Line type="monotone" dataKey="target" stroke="var(--ink)" strokeWidth={2}
+            strokeDasharray="6 4" dot={false} name="Target nominal (inflación 3%)" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ============================================================
+// WITHDRAWALS SCENARIOS TABLE · promedio mensual por escenario
+// en 3 puntos del tiempo: año 1, año mitad, año último.
+// ============================================================
+function WithdrawalsScenariosTable({ pledgeResult, T, withdrawalMonthly_eff, inflationRate = 0.03 }) {
+  if (!pledgeResult?.yearStats) return null;
+  const stats = pledgeResult.yearStats;
+  const yearMid = Math.max(1, Math.round(T / 2));
+  const yearLast = T;
+  // Helpers
+  const monthlyAtYear = (perc, year) => (stats[year]?.[`w_${perc}`] || 0) / 12;
+  const meanMonthlyAtYear = (year) => (stats[year]?.w_mean || 0) / 12;
+  const targetMonthly = (year) => withdrawalMonthly_eff * Math.pow(1 + inflationRate, year - 1);
+
+  const scenarioRows = [
+    { label: "Muy pesimista", subLabel: "(p1 · peor 1% de escenarios)", color: "#8b2c2c", perc: "p1" },
+    { label: "Pesimista",     subLabel: "(p10 · peor 10%)",              color: "#c97a2e", perc: "p10" },
+    { label: "Neutral",       subLabel: "(p50 · mediana)",               color: "#b8923a", perc: "p50" },
+    { label: "Optimista",     subLabel: "(p90 · mejor 10%)",             color: "#7aa83a", perc: "p90" },
+    { label: "Muy optimista", subLabel: "(p99 · mejor 1%)",              color: "#2d7a40", perc: "p99" },
+  ];
+
+  return (
+    <div style={styles.scenarioTableWrap}>
+      <div style={styles.scenarioTableHeader}>
+        <span>Escenario</span>
+        <span>Año 1 (mensual)</span>
+        <span>Año {yearMid} (mensual)</span>
+        <span>Año {yearLast} (mensual)</span>
+      </div>
+      {scenarioRows.map((r) => (
+        <div key={r.label} style={styles.scenarioTableRow}>
+          <div style={styles.scenarioTableCell}>
+            <span style={{ ...styles.scenarioDot, background: r.color }} />
+            <div>
+              <div style={{ fontWeight: 600, color: r.color }}>{r.label}</div>
+              <div style={styles.scenarioSubLabel}>{r.subLabel}</div>
+            </div>
+          </div>
+          <div style={{ ...styles.scenarioTableCell, fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 600 }}>
+            {fmtUsd(monthlyAtYear(r.perc, 1))}
+          </div>
+          <div style={{ ...styles.scenarioTableCell, fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 600 }}>
+            {fmtUsd(monthlyAtYear(r.perc, yearMid))}
+          </div>
+          <div style={{ ...styles.scenarioTableCell, fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 600 }}>
+            {fmtUsd(monthlyAtYear(r.perc, yearLast))}
+          </div>
+        </div>
+      ))}
+      {/* Fila destacada: media cross-paths */}
+      <div style={{ ...styles.scenarioTableRow, background: "var(--surface-2)", borderTop: "2px solid var(--ink)" }}>
+        <div style={styles.scenarioTableCell}>
+          <span style={{ ...styles.scenarioDot, background: "var(--ink)" }} />
+          <div>
+            <div style={{ fontWeight: 700 }}>Media cross-paths</div>
+            <div style={styles.scenarioSubLabel}>(promedio sobre todos los escenarios)</div>
+          </div>
+        </div>
+        <div style={{ ...styles.scenarioTableCell, fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 600 }}>
+          {fmtUsd(meanMonthlyAtYear(1))}
+        </div>
+        <div style={{ ...styles.scenarioTableCell, fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 600 }}>
+          {fmtUsd(meanMonthlyAtYear(yearMid))}
+        </div>
+        <div style={{ ...styles.scenarioTableCell, fontFamily: "'Fraunces', serif", fontSize: 16, fontWeight: 600 }}>
+          {fmtUsd(meanMonthlyAtYear(yearLast))}
+        </div>
+      </div>
+      {/* Fila referencia: target nominal */}
+      <div style={{ ...styles.scenarioTableRow, background: "var(--surface-2)" }}>
+        <div style={styles.scenarioTableCell}>
+          <span style={{ ...styles.scenarioDot, background: "var(--ink-muted)", opacity: 0.5 }} />
+          <div>
+            <div style={{ fontWeight: 600, fontStyle: "italic", color: "var(--ink-muted)" }}>Target nominal</div>
+            <div style={styles.scenarioSubLabel}>(meta con inflación 3% · techo)</div>
+          </div>
+        </div>
+        <div style={{ ...styles.scenarioTableCell, fontFamily: "'JetBrains Mono', monospace", color: "var(--ink-muted)", fontStyle: "italic" }}>
+          {fmtUsd(targetMonthly(1))}
+        </div>
+        <div style={{ ...styles.scenarioTableCell, fontFamily: "'JetBrains Mono', monospace", color: "var(--ink-muted)", fontStyle: "italic" }}>
+          {fmtUsd(targetMonthly(yearMid))}
+        </div>
+        <div style={{ ...styles.scenarioTableCell, fontFamily: "'JetBrains Mono', monospace", color: "var(--ink-muted)", fontStyle: "italic" }}>
+          {fmtUsd(targetMonthly(yearLast))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NetWorthAreaChart({ pledgeResult, T, V0Propio }) {
   if (!pledgeResult?.yearStats) return null;
   const baselineStats = pledgeResult.baseline?.yearStats;
   const data = pledgeResult.yearStats.slice(0, T + 1).map((s, idx) => {
-    const p1  = Math.max(0, s.nw_p1);
-    const p10 = Math.max(0, s.nw_p10);
-    const p25 = Math.max(0, s.nw_p25);
-    const p75 = Math.max(0, s.nw_p75);
-    const p90 = Math.max(0, s.nw_p90);
-    const p99 = Math.max(0, s.nw_p99);
+    // SIN CLIP a 0 — si NW va a negativo (loan > value), debe verse claramente
+    const min = s.nw_p1;
+    const max = s.nw_p99;
     const baseline = baselineStats?.[idx]?.nw_p50 ?? null;
     return {
       year: s.year,
-      base: p1,                            // base = p1 (la cola más pesimista)
-      band_1_10:   p10 - p1,               // 1-10% paths: muy pesimista
-      band_10_25:  p25 - p10,
-      band_25_50:  s.nw_p50 - p25,
-      band_50_75:  p75 - s.nw_p50,
-      band_75_90:  p90 - p75,
-      band_90_99:  p99 - p90,              // 90-99% paths: muy optimista
-      p50: s.nw_p50,
+      base: min,                  // base de la banda
+      bandWidth: max - min,       // ancho de la banda (min a max)
+      mean: s.nw_mean,            // media cross-escenarios
       baseline_p50: baseline,
-      p1, p10, p25, p75, p90, p99,
+      min, max,
     };
   });
   const showBaseline = baselineStats !== undefined && baselineStats !== null;
+  // Detectar si hay NW negativo en algún punto para mostrar región de quiebra
+  const minNW = Math.min(...data.map(d => d.min));
+  const showBankruptcyRegion = minNW < 0;
   return (
     <div style={styles.chartWrap}>
       <ResponsiveContainer width="100%" height={420}>
@@ -5806,41 +6080,36 @@ function NetWorthAreaChart({ pledgeResult, T, V0Propio }) {
             label={{ value: "Patrimonio neto (USD)", angle: -90, position: "insideLeft", offset: -55, fill: "var(--ink-muted)", fontSize: 11 }} />
           <Tooltip
             formatter={(value, name) => {
-              if (name === 'base' || name?.startsWith?.('band_')) return null;
+              if (name === 'base' || name === 'bandWidth') return null;
               return [fmtUsd(value), name];
             }}
             labelFormatter={(y) => `Año ${y}`}
             contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }} />
           <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, paddingTop: 8 }}
             payload={[
-              { value: "p1–p10 (peor 1-10% · cola extrema)", type: "square", color: "rgba(139, 44, 44, 0.10)", payload: { strokeDasharray: "0" } },
-              { value: "p10–p25 (pesimista)",  type: "square", color: "rgba(139, 44, 44, 0.18)", payload: { strokeDasharray: "0" } },
-              { value: "p25–p50",              type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
-              { value: "p50–p75",              type: "square", color: "rgba(184, 146, 58, 0.22)", payload: { strokeDasharray: "0" } },
-              { value: "p75–p90 (optimista)",  type: "square", color: "rgba(45, 94, 58, 0.18)", payload: { strokeDasharray: "0" } },
-              { value: "p90–p99 (mejor 90-99% · cola extrema)", type: "square", color: "rgba(45, 94, 58, 0.10)", payload: { strokeDasharray: "0" } },
-              { value: "Mediana (con apalancamiento)", type: "line", color: "var(--ink)", payload: { strokeDasharray: "0" } },
+              { value: "Mínimo–Máximo (p1–p99 según escenarios)", type: "square", color: "rgba(184, 146, 58, 0.20)", payload: { strokeDasharray: "0" } },
+              { value: "Media cross-escenarios", type: "line", color: "var(--ink)", payload: { strokeDasharray: "0" } },
               ...(showBaseline ? [{ value: "Mediana sin apalancamiento (lev=0%)", type: "line", color: "var(--accent)", payload: { strokeDasharray: "6 4" } }] : []),
+              ...(showBankruptcyRegion ? [{ value: "Quiebra (NW < 0)", type: "square", color: "rgba(139, 44, 44, 0.10)", payload: { strokeDasharray: "0" } }] : []),
             ]} />
-          {/* Bandas apiladas: base + 6 anchos */}
+          {/* Banda min-max */}
           <Area type="monotone" dataKey="base" stackId="band" stroke="none" fill="transparent" legendType="none" name="base" />
-          <Area type="monotone" dataKey="band_1_10" stackId="band" stroke="none"
-            fill="rgba(139, 44, 44, 0.10)" name="band_1_10" />
-          <Area type="monotone" dataKey="band_10_25" stackId="band" stroke="none"
-            fill="rgba(139, 44, 44, 0.18)" name="band_10_25" />
-          <Area type="monotone" dataKey="band_25_50" stackId="band" stroke="none"
-            fill="rgba(184, 146, 58, 0.22)" name="band_25_50" />
-          <Area type="monotone" dataKey="band_50_75" stackId="band" stroke="none"
-            fill="rgba(184, 146, 58, 0.22)" name="band_50_75" />
-          <Area type="monotone" dataKey="band_75_90" stackId="band" stroke="none"
-            fill="rgba(45, 94, 58, 0.18)" name="band_75_90" />
-          <Area type="monotone" dataKey="band_90_99" stackId="band" stroke="none"
-            fill="rgba(45, 94, 58, 0.10)" name="band_90_99" />
+          <Area type="monotone" dataKey="bandWidth" stackId="band" stroke="none"
+            fill="rgba(184, 146, 58, 0.20)" name="bandWidth" />
           {showBaseline && (
             <Line type="monotone" dataKey="baseline_p50" stroke="var(--accent)"
               strokeWidth={2} strokeDasharray="6 4" dot={false} name="Mediana sin apalancamiento" />
           )}
-          <Line type="monotone" dataKey="p50" stroke="var(--ink)" strokeWidth={2.8} dot={false} name="Mediana" />
+          <Line type="monotone" dataKey="mean" stroke="var(--ink)" strokeWidth={2.8} dot={false} name="Media" />
+          {/* Líneas finas para enfatizar mín y máx */}
+          <Line type="monotone" dataKey="min" stroke="var(--negative)" strokeWidth={1.2} strokeDasharray="2 3" dot={false} name="Mínimo (p1)" legendType="none" />
+          <Line type="monotone" dataKey="max" stroke="var(--positive)" strokeWidth={1.2} strokeDasharray="2 3" dot={false} name="Máximo (p99)" legendType="none" />
+          {/* Línea de referencia en 0 — separa NW positivo de quiebra */}
+          {showBankruptcyRegion && (
+            <ReferenceLine y={0} stroke="var(--negative)" strokeWidth={1.5} strokeDasharray="4 4"
+              label={{ value: "QUIEBRA (NW = 0)", position: "insideBottomRight",
+                       fill: "var(--negative)", fontSize: 10.5, fontWeight: 700 }} />
+          )}
           <ReferenceLine y={V0Propio} stroke="var(--ink-muted)" strokeDasharray="2 3"
             label={{ value: `V₀ = ${fmtUsdCompact(V0Propio)}`, position: "insideTopRight",
                      fill: "var(--ink-muted)", fontSize: 10 }} />
@@ -5887,7 +6156,7 @@ function MarginCallCurvesChart({ marginCallCurves, mcLTV, T }) {
           <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, paddingTop: 8 }}
             payload={[
               ...marginCallCurves.map((c, i) => ({
-                value: `${c.label} · realizado p50 ${fmtUsdCompact(c.avgMonthly_p50)}/mes`,
+                value: `${c.label} · realizado promedio ${fmtUsdCompact(c.avgMonthly_mean)}/mes`,
                 type: "line", color: colors[i],
                 payload: { strokeDasharray: "0" },
               })),
@@ -8179,6 +8448,108 @@ const styles = {
     background: "var(--surface)",
     border: "1px solid var(--border)",
     borderRadius: 2,
+  },
+  sigmaWarning: {
+    marginBottom: 20,
+    padding: "16px 20px",
+    background: "rgba(184, 146, 58, 0.10)",
+    border: "1px solid var(--gold)",
+    borderLeft: "4px solid var(--gold)",
+    borderRadius: 2,
+  },
+  sigmaWarningTitle: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    fontWeight: 700,
+    color: "var(--gold)",
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    marginBottom: 6,
+  },
+  sigmaWarningBody: {
+    fontFamily: "'DM Sans', sans-serif",
+    fontSize: 13.5,
+    color: "var(--ink)",
+    lineHeight: 1.55,
+  },
+  withdrawalSummary: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: 12,
+    marginTop: 18,
+    padding: "14px 16px",
+    background: "var(--surface-2)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+  },
+  scenarioTableWrap: {
+    marginTop: 18,
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  scenarioTableHeader: {
+    display: "grid",
+    gridTemplateColumns: "2fr 1.2fr 1.2fr 0.8fr",
+    padding: "10px 16px",
+    background: "var(--surface-2)",
+    borderBottom: "1px solid var(--border)",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--ink-muted)",
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+  },
+  scenarioTableRow: {
+    display: "grid",
+    gridTemplateColumns: "2fr 1.2fr 1.2fr 0.8fr",
+    padding: "12px 16px",
+    borderBottom: "1px solid var(--border)",
+    alignItems: "center",
+  },
+  scenarioTableCell: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 13,
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+  },
+  scenarioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 2,
+    flexShrink: 0,
+  },
+  scenarioSubLabel: {
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
+    fontStyle: "italic",
+    marginTop: 2,
+  },
+  withdrawalSummaryItem: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  withdrawalSummaryLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--ink-muted)",
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+  },
+  withdrawalSummaryValue: {
+    fontFamily: "'Fraunces', serif",
+    fontSize: 22,
+    fontWeight: 600,
+    color: "var(--ink)",
+    lineHeight: 1.1,
+  },
+  withdrawalSummaryHint: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: "var(--ink-muted)",
+    fontStyle: "italic",
   },
   pignSectionHeader: {
     marginBottom: 14,

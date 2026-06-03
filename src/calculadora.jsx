@@ -4045,24 +4045,18 @@ export default function Calculadora() {
                   type="text"
                   inputMode="numeric"
                   value={withdrawalMonthly}
-                  onChange={(e) => {
-                    const cleaned = e.target.value.replace(/[^0-9.,]/g, "");
-                    setWithdrawalMonthly(cleaned);
-                    // Sync tasa equivalente: monthly × 12 / V₀
-                    const monthly = parseFloat(cleaned.replace(",", ".")) || 0;
-                    if (V0_eff > 0) setWithdrawalRate((monthly * 12) / V0_eff);
-                  }}
+                  onChange={(e) => setWithdrawalMonthly(e.target.value.replace(/[^0-9.,]/g, ""))}
                   style={styles.withdrawalHeroInput}
                   placeholder="4000"
                 />
                 <span style={styles.withdrawalHeroSuffix}>/mes</span>
               </div>
               <div style={styles.withdrawalHeroDesc}>
-                Cada año: <code>W = min({fmtPct(withdrawalRate, 2)} × NW, target_t × ajuste)</code>.
-                El target crece 3%/año con inflación (año 1 = <strong>{fmtUsd(withdrawalMonthly_eff)}/mes</strong>,
-                año {horizon} = <strong>{fmtUsd(withdrawalMonthly_eff * Math.pow(1.03, horizon - 1))}/mes</strong>).
-                El ajuste bounded (±30%) hace que retires un poco más en booms y un poco menos en caídas,
-                con la tasa × NW como floor de seguridad.
+                <strong>Tu objetivo</strong> de retiro mensual — independiente de la tasa.
+                El target crece 3%/año con inflación: año 1 = <strong>{fmtUsd(withdrawalMonthly_eff)}/mes</strong>,
+                año {horizon} = <strong>{fmtUsd(withdrawalMonthly_eff * Math.pow(1.03, horizon - 1))}/mes</strong>.
+                Cada año se ajusta ±30% según el mercado y se cappea por <code>{fmtPct(withdrawalRate, 2)} × NW</code>{" "}
+                (tasa floor, configurable abajo).
               </div>
             </div>
             <div style={styles.withdrawalHeroRight}>
@@ -4102,15 +4096,11 @@ export default function Calculadora() {
             <SliderControl label="Umbral margin call" value={mcLTV}
               min={0.50} max={0.85} step={0.05} onChange={setMcLTV}
               fmt={v => fmtPct(v, 0)} hint="L/V máximo del banco" />
-            <SliderControl label="Tasa de retiro (target/V₀)" value={withdrawalRate}
-              min={0.005} max={0.08} step={0.0025}
-              onChange={(rate) => {
-                setWithdrawalRate(rate);
-                // Sync USD: rate × V₀ / 12 = mes (año 1)
-                if (V0_eff > 0) setWithdrawalMonthly(String(Math.round((rate * V0_eff) / 12)));
-              }}
+            <SliderControl label="Tasa de retiro" value={withdrawalRate}
+              min={0.005} max={0.15} step={0.0025}
+              onChange={setWithdrawalRate}
               fmt={v => fmtPct(v, 2)}
-              hint={V0_eff > 0 ? `≡ ${fmtUsd((withdrawalRate * V0_eff) / 12)}/mes año 1` : "anual sobre V₀"} />
+              hint="floor: máx % del NW por año" />
             <div style={styles.horizonLink}>
               <div style={styles.sliderLabel}>HORIZONTE</div>
               <div style={styles.horizonLinkValue}>{horizon} años</div>
